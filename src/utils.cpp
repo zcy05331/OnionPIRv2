@@ -17,8 +17,9 @@ size_t g_custom_N = 0;
 uint64_t g_custom_q = 0;
 uint64_t g_custom_root = 0;
 
-// Thread-local cache of HEXL NTT objects keyed by (N, q). Each thread owns
-// its own copy; no locking needed. Most (N, q) used here are prime moduli;
+// Function-static cache of HEXL NTT objects keyed by (N, q). This is not
+// thread_local and has no lock; current benchmark code treats single-threaded
+// execution as the safety boundary. Most (N, q) used here are prime moduli;
 // HEXL's default ctor searches for a primitive root. Composite q falls back
 // to the registered custom root.
 intel::hexl::NTT &get_ntt(size_t N, uint64_t q) {
@@ -55,6 +56,9 @@ void utils::register_ntt_root(size_t N, uint64_t q, uint64_t root) {
 
 void utils::automorphism_coeff(const uint64_t *in, size_t N, uint32_t k,
                                uint64_t q, uint64_t *out) {
+  // X -> X^k maps ciphertexts from secret s to secret σ_k(s). Query expansion
+  // applies the matching BvKeySwitchKey afterward to return to the original
+  // secret; this helper only performs the polynomial automorphism.
   const size_t two_n = 2 * N;
   for (size_t i = 0; i < N; i++) {
     size_t dest = (static_cast<uint64_t>(i) * k) % two_n;
@@ -69,6 +73,7 @@ void utils::automorphism_coeff(const uint64_t *in, size_t N, uint32_t k,
 void utils::automorphism_ntt(const uint64_t *in, size_t N, uint32_t k,
                               uint64_t q, uint64_t *out) {
   // NTT → coeff → automorphism → NTT. Two extra transforms, only used in keygen.
+  // Input/output domain remains NTT; the coefficient-form automorphism is internal.
   std::vector<uint64_t> coeff(in, in + N);
   ntt_inv(coeff.data(), N, q);
   automorphism_coeff(coeff.data(), N, k, q, out);
@@ -199,7 +204,9 @@ std::string utils::uint128_to_string(uint128_t value) {
 
 std::vector<std::vector<uint64_t>> utils::gsw_gadget(size_t l, uint64_t base_log2,
                 const std::vector<uint64_t> &rns_mods) {
-  // Create RGSW gadget.
+  // Create RGSW gadget. Rows are MSB-first: row p is B^(l-1-p).
+  // QueryPack, RGSW encryption, and external-product decomposition must use
+  // this same row order or gadget digits will multiply the wrong powers.
   const size_t K = rns_mods.size();
   std::vector<std::vector<uint64_t>> gadget(K, std::vector<uint64_t>(l));
   for (size_t i = 0; i < K; i++) {
@@ -428,6 +435,8 @@ uint64_t utils::rescale(uint64_t a, uint64_t inp_mod, uint64_t out_mod) {
   const int64_t inp_mod_i64 = static_cast<int64_t>(inp_mod);
   const __int128 out_mod_i128 = static_cast<__int128>(out_mod);
 
+  // Center first, then round by out_mod/inp_mod. Unsigned scaling would map
+  // representatives near inp_mod as large positives and corrupt negative noise.
   int64_t v = static_cast<int64_t>(a % inp_mod);
   if (v >= inp_mod_i64 / 2) v -= inp_mod_i64;
 

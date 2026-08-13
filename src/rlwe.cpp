@@ -19,6 +19,9 @@ void encrypt_zero(const RlweSk &sk, size_t N, uint64_t q, double sigma,
   ct.resize(N);
 
   // Sample a ← U([0, q)) and e ← Gaussian(0, sigma²), both in coefficient form.
+  // 这里固定 BFV 符号约定：c1=a，c0=-(a*s+e)。error 符号与常见
+  // c0=Delta*m+e-a*s 写法相反，但 Gaussian 分布对称，decrypt 的
+  // phase=c0+c1*s 仍得到同等语义。
   utils::sample_uniform_poly(ct.c1.data(), N, q, rng);
   std::vector<uint64_t> e(N);
   utils::sample_gaussian(e.data(), N, q, sigma, rng);
@@ -37,6 +40,8 @@ void encrypt_zero(const RlweSk &sk, size_t N, uint64_t q, double sigma,
   const std::vector<uint64_t> zeros(N, 0);
   intel::hexl::EltwiseSubMod(ct.c0.data(), zeros.data(), ct.c0.data(), N, q);
 
+  // 真实 domain transition：调用者请求 NTT 输出时，两个 ciphertext
+  // polynomials 都从 coefficient form 转到 NTT form；ntt_form 仅记录结果。
   if (ntt_form) {
     utils::ntt_fwd(ct.c0.data(), N, q);
     utils::ntt_fwd(ct.c1.data(), N, q);
@@ -47,6 +52,8 @@ void encrypt_zero(const RlweSk &sk, size_t N, uint64_t q, double sigma,
 void decrypt(const RlweCt &ct, const RlweSk &sk, size_t N, uint64_t q,
              uint64_t t, RlwePt &pt) {
   // We need c0 in coefficient form and c1 in NTT form (for pointwise mult with sk).
+  // ct.ntt_form 是 domain 标记，不会自动转换；这里按标记显式补齐
+  // c0 coefficient / c1 NTT 两个工作副本。
   std::vector<uint64_t> c0_coef(N), c1_ntt(N);
   std::memcpy(c0_coef.data(), ct.c0.data(), N * sizeof(uint64_t));
   std::memcpy(c1_ntt.data(),  ct.c1.data(), N * sizeof(uint64_t));
@@ -63,6 +70,7 @@ void decrypt(const RlweCt &ct, const RlweSk &sk, size_t N, uint64_t q,
   utils::ntt_inv(phase.data(), N, q);
 
   // phase = c0 + c1*s  (coefficient form, values in [0, q)).
+  // 这与 encrypt_zero/encrypt_bfv 的 c0=-(a*s+e)+Delta*m、c1=a 约定配套。
   intel::hexl::EltwiseAddMod(phase.data(), phase.data(), c0_coef.data(), N, q);
 
   // Scale-and-round q → t (centered, integer-exact). Same as round(phase*t/q) mod t.
@@ -108,6 +116,8 @@ void encrypt_bfv(const std::vector<uint64_t> &m, const RlweSk &sk,
                  size_t N, uint64_t q, uint64_t t, double sigma,
                  std::mt19937_64 &rng, RlweCt &ct) {
   encrypt_zero(sk, N, q, sigma, rng, ct, /*ntt_form=*/false);
+  // BFV message term 只加到 c0：c0=-(a*s+e)+Delta*m、c1=a，
+  // decrypt phase=c0+c1*s。单模数路径使用 Delta=floor(q/t)。
   const uint64_t delta = q / t;
   for (size_t i = 0; i < N && i < m.size(); i++) {
     const uint64_t scaled = (__uint128_t)delta * (m[i] % t) % q;
@@ -225,12 +235,15 @@ void encrypt_zero_rns(const RlweSk &sk, size_t N,
   ct.c0.assign(N * K, 0);
   ct.c1.assign(N * K, 0);
 
-  // Per-limb uniform a.
+  // Per-limb uniform a. RNS ciphertext polynomials are limb-major:
+  // [q0 的 N 个 coefficients][q1 的 N 个 coefficients]...
   for (size_t k = 0; k < K; k++) {
     utils::sample_uniform_poly(ct.c1.data() + k * N, N, qs[k], rng);
   }
 
   // Shared signed e, reduced per limb.
+  // 同一个 signed Gaussian error 被投影到每个 limb；符号约定仍是
+  // c0_k=-(a_k*sk_k+e_k)，decrypt phase_k=c0_k+c1_k*sk_k。
   std::vector<uint64_t> e(N * K);
   sample_gaussian_rns(e.data(), N, qs, sigma, rng);
 
@@ -252,6 +265,8 @@ void encrypt_zero_rns(const RlweSk &sk, size_t N,
     intel::hexl::EltwiseAddMod(c0_k, c0_k, e_k, N, q);
     intel::hexl::EltwiseSubMod(c0_k, zeros.data(), c0_k, N, q);
 
+    // 真实 domain transition：请求 NTT 输出时，每个 limb 的 c0/c1
+    // 分别转到自己的 q_k NTT domain；ntt_form 只是统一记录该状态。
     if (ntt_form) {
       utils::ntt_fwd(c0_k, N, q);
       utils::ntt_fwd(c1_k, N, q);
@@ -268,6 +283,8 @@ void encrypt_bfv_rns(const std::vector<uint64_t> &m, const RlweSk &sk,
   const size_t K = qs.size();
 
   // Q as uint128. Caller upholds sum(log q_k) <= 128.
+  // K=2 不能逐 limb 各自近似 Delta；必须先在 composite Q 上计算同一个
+  // round(Q*m/t) 整数，再投影到每个 RNS limb，保证后续 CRT phase 一致。
   uint128_t Q = 1;
   for (uint64_t q : qs) Q *= q;
   const uint128_t Delta = Q / t;
@@ -296,6 +313,9 @@ void decrypt_rns(const RlweCt &ct, const RlweSk &sk, size_t N,
   const size_t K = qs.size();
 
   // Per-limb phase = c0 + c1*sk in coefficient form.
+  // 输入 ciphertext 可在 coefficient 或 NTT domain；这里按 ct.ntt_form
+  // 显式构造每个 limb 的 coefficient-form phase。phase 符合
+  // c0=-(a*s+e)+Delta*m、c1=a 的加密约定。
   std::vector<uint64_t> phase(N * K);
   std::vector<uint64_t> c1_buf(N), c0_buf(N);
   for (size_t k = 0; k < K; k++) {
@@ -344,6 +364,8 @@ void decrypt_rns(const RlweCt &ct, const RlweSk &sk, size_t N,
 
       // Mod-switch q1 → drop: phase' = round(phase_mp / q1) mod q0.
       // (phase_mp + q1/2) / q1 ∈ [0, q0+1] for phase_mp ∈ [0, Q).
+      // 这里的 phase_mp 来自 composite-Q 的同一整数表示，和
+      // encrypt_bfv_rns 中的 scale 构造保持一致。
       const uint128_t num = phase_mp + (static_cast<uint128_t>(q1) >> 1);
       uint64_t phase_prime = static_cast<uint64_t>(num / q1);
       if (phase_prime >= q0) phase_prime -= q0;

@@ -65,10 +65,13 @@ bool is_prime(uint64_t n);
 // Apply the Galois automorphism σ_k : x → x^k in Z_q[x]/(x^N+1), coefficient form.
 // Input/output in [0, q). Requires k odd, 1 ≤ k < 2N.
 // Maps coefficient i to position (i*k) % (2N); wraps with sign flip if index ≥ N.
+// 对 ciphertext 应用 X -> X^k 后，密文语义从 secret s 变成 secret σ_k(s)；
+// ExpandBFV 随后必须使用对应的 BvKeySwitchKey 切回原 secret。
 void automorphism_coeff(const uint64_t *in, size_t N, uint32_t k, uint64_t q, uint64_t *out);
 
 // Same automorphism but input/output in NTT form.
 // Internally converts coeff ↔ NTT; 2 extra NTTs but only used in keygen.
+// domain 变化只发生在函数内部；返回时仍是 NTT form。
 void automorphism_ntt(const uint64_t *in, size_t N, uint32_t k, uint64_t q, uint64_t *out);
 
 // Compute round(num / den) for non-negative integers via integer arithmetic.
@@ -92,8 +95,8 @@ inline void right_shift_uint128(uint64_t *operand, int shift, uint64_t *result) 
 }
 
 // Negacyclic NTT over Z_q[x]/(x^N+1), implemented via HEXL under the hood.
-// The HEXL NTT object for each (N, q) pair is cached thread-locally so repeated
-// calls are fast and lock-free.
+// HEXL NTT objects 由实现里的 function-static map 按 (N, q) 缓存；不是
+// thread_local，也没有锁。当前 benchmark 的单线程假设是安全边界。
 void ntt_fwd(uint64_t *data, size_t N, uint64_t q);
 void ntt_inv(uint64_t *data, size_t N, uint64_t q);
 
@@ -206,6 +209,8 @@ std::string uint128_to_string(uint128_t value);
 /**
  * @brief Construct a RGSW gadget. Notice that the gadget is from large to
  * small, i.e., the first row is B^(log q / log B -1), the final row is 1.
+ * gsw_gadget 按 MSB-first 返回 B^(l-1-p)；QueryPack、RGSW encryption、
+ * external-product decomposition 必须共用相同 row order。
  */
 std::vector<std::vector<uint64_t>>
 gsw_gadget(size_t l, uint64_t base_log2,
@@ -251,6 +256,8 @@ void sample_ternary(uint64_t *out, size_t N, uint64_t q, std::mt19937_64 &rng);
 // centered (signed) round-to-nearest: lifts a into [-inp_mod/2, inp_mod/2),
 // computes round(v * out_mod / inp_mod) in i128, and reduces into [0, out_mod).
 // Pure integer arithmetic — no FP precision loss. Matches Spiral's rescale.
+// 语义关键点：先把 [0, inp_mod) 解释为 centered representative，再按
+// out_mod/inp_mod round；直接做 unsigned 比例缩放会破坏负噪声语义。
 uint64_t rescale(uint64_t a, uint64_t inp_mod, uint64_t out_mod);
 
 // Given the target number of plaintexts, GSW ell for further dims, and the expansion tree height,
