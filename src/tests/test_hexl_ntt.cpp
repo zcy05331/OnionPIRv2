@@ -13,7 +13,11 @@ void PirTest::test_hexl_ntt() {
   const uint64_t q = pir_params.get_rns_mods()[0];
   BENCH_PRINT("N = " << N << ", q = " << q << " (" << std::ceil(std::log2(q)) << " bits)");
 
-  intel::hexl::NTT ntt(N, q);
+  const auto &composite_rns = pir_params.get_composite_rns();
+  const uint64_t root = composite_rns.enabled
+                            ? composite_rns.w_crt
+                            : intel::hexl::MinimalPrimitiveRoot(2 * N, q);
+  intel::hexl::NTT ntt(N, q, root);
   BENCH_PRINT("HEXL NTT object created.");
 
   std::mt19937_64 rng(42);

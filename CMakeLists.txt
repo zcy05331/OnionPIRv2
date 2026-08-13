@@ -29,8 +29,13 @@ if (USE_HEXL)
     message(STATUS "HEXL support enabled.")
     add_compile_definitions(ONIONPIR_USE_HEXL)
     
-    # Set HEXL installation path
-    set(HEXL_DIR "/u/yuec12/OnionPIRv2/hexl_install/lib64/cmake/hexl-1.2.6")
+    # Default to the repository-local installation while allowing callers to
+    # override the package directory with -DHEXL_DIR=...
+    set(
+        HEXL_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/hexl_install/lib64/cmake/hexl-1.2.6"
+        CACHE PATH "Directory containing HEXLConfig.cmake"
+    )
     
     # Find HEXL package
     find_package(HEXL REQUIRED)
