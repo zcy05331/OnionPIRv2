@@ -37,6 +37,11 @@ GSWCt PirClient::generate_gsw_from_key() {
 
 
 std::vector<size_t> PirClient::get_query_indices(size_t pt_idx) {
+  // Algorithm 4 line 1 把扁平 plaintext index 映射到 QueryPack 坐标。
+  // col_idx 是首维 BFV one-hot 坐标；row_idx 覆盖其余维度。论文规则是
+  // binary hypercube，这里实现为 complete-but-not-perfect/ragged tree。
+  // 返回向量为 {col_idx, selector bits...}；selector bits 按服务端归约
+  // 顺序输出，第一个 selector 处理 deepest folded leaves。
   const size_t col_idx = pt_idx % pir_params_.get_fst_dim_sz();  // the first dimension
   const size_t row_idx = pt_idx / pir_params_.get_fst_dim_sz();  // the rest of the dimensions
   const size_t other_dim_sz = pir_params_.get_other_dim_sz();
@@ -55,13 +60,11 @@ std::vector<size_t> PirClient::get_query_indices(size_t pt_idx) {
   const size_t r = 2 * other_dim_sz - (1 << h);   // the number of elements in the last level of the complete binary tree.
   const size_t sl = other_dim_sz - r;
 
-  // the last r elements lives in the last level of the complete binary tree.
-  // It is an even number but it is not a power of 2.
-  // The rest sl elements lives in the second to last level of the complete binary tree.
-  // Observe that other_dim_sz - r/2 = 2^(h-1), which is the number of nodes in the second to last level of the complete binary tree.
-  // we use the first selection bit to compute the mux for the first r elements.
-  // The rest is a normal perfect binary tree. 
-  // the first selection bit is special:
+  // r 是实际落在 deepest level 的 leaves 数；sl 是已经在上一层表示的 rows。
+  // row_idx < sl 时没有 folded leaf pair，因此 deepest selector bit 为 0，
+  // perfect_idx 保持 row_idx。否则 corrected_idx 选中 r 个 deepest leaves
+  // 之一：corrected_idx % 2 是 folded-pair bit，corrected_idx / 2 先把
+  // leaf pair 折叠回 parent position，再输出剩余 perfect-tree selector bits。
   size_t perfect_idx;
   if (row_idx < other_dim_sz - r) {
     query_indices.push_back(0);
@@ -105,8 +108,13 @@ RlweCt PirClient::fast_generate_query(const size_t pt_idx) {
   const size_t reversed_index = utils::bit_reverse(query_indices[0], expan_height);
   DEBUG_PRINT("reversed_index: " << reversed_index << ", query_indices[0]: " << query_indices[0]);
 
-  // BFV encrypt under sk: c0 = -(a*s+e) + round(Q*m/t), c1 = a (coeff form).
-  // Per-limb gadget injection: scaled mod q_k for each k.
+  // QueryPack 等价于先 packing plaintext vector 再执行 BFV encrypt。这里利用
+  // BFV message-add 线性：先 encrypt zero 到 coefficient form，再把 scaled
+  // plaintext 直接加到 c0 的 BitRev(col_idx) coefficient。注入量是
+  // Delta*(capacity^-1 mod t)；capacity^-1 抵消 ExpandBFV 每层 add/sub
+  // 引入的 scaling。K=1 分支用 round(q0*inverse/t) 表示 direct scaling；
+  // K=2 分支先按 composite Q=q0*q1 计算 full-q plaintext lift，再降到各
+  // RNS limb。
   RlweCt query;
   encrypt_zero_rns(rlwe_sk_, N, qs, sigma, rng_, query, /*ntt_form=*/false);
 
@@ -157,9 +165,12 @@ void PirClient::add_gsw_to_query(RlweCt &query, const std::vector<size_t> query_
   std::vector<std::vector<uint64_t>> gadget =
       utils::gsw_gadget(l, pir_params_.get_base_log2(), rns_mods);
 
-  // Algorithm 1 from the OnionPIR paper: when bit i is "1", write gadget powers
-  // (scaled by 1/capacity) into the slots that the expansion will turn into
-  // BFV ciphertexts encoding B^p · m for each gadget power p.
+  // QueryPack packed slots layout:
+  // [0, N0) 是首维 BFV one-hot。代码索引 i=1..query_indices.size()-1 时，
+  // 第 i 个高维 selector 占用 [N0 + (i-1)*L_EP, N0 + i*L_EP)，即对应
+  // RGSW sample 的 top half rows。selector=1 注入 gadget powers；
+  // selector=0 保持这些 slots 为 encryption of zero。每个位置先 BitRev，
+  // 再乘 capacity^-1，使 ExpandBFV 恢复预期 row constants。
   auto q_head = query.data(0);
   for (size_t i = 1; i < query_indices.size(); i++) {
     if (query_indices[i] != 1) continue;
