@@ -5,6 +5,11 @@
 #include <cstdint>
 #include <vector>
 
+// [运行期参数] DBConsts 只给 bit width 与策略；PirParams 负责生成实际
+// NTT-friendly moduli、CRT tables、small_q、gadget base 和数据库 shape。
+// logical DB size、physical NTT storage 和 modeled communication bytes 是
+// 三种不同口径，不能用同一个 size getter 替代。
+//
 // Precomputed constants used by the K=2 CRT compose/decompose helpers.
 struct RnsTables {
   uint64_t q0_inv_mod_q1 = 0;
@@ -32,6 +37,10 @@ public:
   PirParams(const PirParams &pir_params) = default;
 
   // ================== getters ==================
+  // Getter group exposes derived runtime parameters. Treat get_DBSize_MB() as
+  // logical plaintext payload, get_physical_storage_MB() as aligned NTT
+  // coefficient storage, and get_BFV_size()/key helpers as communication-size
+  // models; they intentionally answer different questions.
   const size_t get_ct_mod_width() const;
 
   inline const size_t get_uint_size() const { return sizeof(db_coeff_t); }
@@ -72,6 +81,8 @@ public:
   // encryption and key generation. Defined in DBConsts::NoiseStdDev.
   inline double get_noise_std_dev() const { return DBConsts::NoiseStdDev; }
 
+  // Seed-compressed BFV communication model only. This is not an actual
+  // query/key serializer and does not promise byte-for-byte wire layout.
   inline const size_t get_BFV_size(bool use_seed = true) const {
     const size_t per_poly_bits = DBConsts::PolyDegree * get_ct_mod_width();
     if (use_seed) {
@@ -81,6 +92,8 @@ public:
     }
   }
 
+  // Seed-compressed key-size models used for reporting communication bytes;
+  // concrete key objects are built elsewhere and are not serialized here.
   inline const size_t get_gsw_key_size(bool use_seed = true) const {
     return 2 * l_key_ * get_BFV_size(use_seed);
   }
@@ -111,8 +124,9 @@ private:
   RnsTables rns_tables_;
   CompositeRnsTables composite_rns_;
 
-  // Populate rns_mods_ and composite_rns_ for the composite-first-dim path.
-  // Registers the CRT-combined 2N-th root with utils so later NTT calls on the
-  // composite modulus pick it up (HEXL's default ctor assumes a prime).
+  // [Composite NTT] 流水线把 q=q1*q2 当成一个 logical K=1 modulus；
+  // 只有首维 matrix multiplication 临时把 coefficient 投影到 q1/q2，
+  // 以使用 29-bit 的 32x32->64 kernel。w_crt 是在 composite q 下可用的
+  // 2N-th root，必须注册给 NTT wrapper；它不是普通 prime-modulus root。
   void init_composite_rns();
 };

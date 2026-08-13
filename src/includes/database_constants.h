@@ -12,6 +12,10 @@ typedef unsigned __int128 uint128_t;
 //   -DACTIVE_CONFIG=CONFIG_N2048_K1
 // ----------------------------------------------------------------------------
 //
+// [论文参数] 2025 论文评测使用 n=2048、log q≈58、log t=13、
+// log q'=22、σ=2.55。run.py 默认选择 CONFIG_N2048_K1_COMP，
+// 因而该 config 是阅读 Algorithm 1-4 时的主参考路径。
+//
 // Naming: CONFIG_N{poly_degree}_K{rns_limb_count}[_COMP]. Each config carries
 // its own gadget lengths and PlainMod. Keep configs aligned with the run.py
 // aliases.
@@ -19,13 +23,17 @@ typedef unsigned __int128 uint128_t;
 //   CONFIG_N2048_K1_COMP   K=1 composite split (q1*q2 ≈ 2^58, 29+29).
 //   CONFIG_N2048_K2_MP     K=2, N=2048, log Q ≈ 58.
 //   CONFIG_N4096_K2_MP     K=2, N=4096, log Q ≈ 120.
+//
+// 三个长度不能混用：
+//   L_EP  : data selector 的 external-product gadget 行数；
+//   L_KEY : 用 RGSW(s) 补全 selector 时的 key decomposition 行数；
+//   L_KS  : ExpandBFV 中 BV key switching 的 decomposition 行数。
 #define CONFIG_N2048_K1          0
 #define CONFIG_N2048_K2_MP       1
 #define CONFIG_N4096_K2_MP       2
-// Composite first-dim split: q = q1*q2 (29+29). Pipeline sees a single ~58-bit
-// modulus (single-mod K=1 paths are reused for everything), but the first-dim
-// matmul splits each NTT coefficient into (mod q1, mod q2) for 32x32->64
-// multiplies.
+// Composite first-dim split: q = q1*q2 (29+29). Pipeline sees a logical
+// single-mod K=1 modulus, but the first-dim matmul splits each NTT coefficient
+// into (mod q1, mod q2) for 32x32->64 multiplies.
 #define CONFIG_N2048_K1_COMP     3
 #ifndef ACTIVE_CONFIG
 #define ACTIVE_CONFIG CONFIG_N2048_K1
@@ -51,7 +59,10 @@ namespace DBConsts {
   // ==========================================================================
 
 #if ACTIVE_CONFIG == CONFIG_N2048_K1
-  // Production-tested cell. K=1, log Q = 60.
+  // K=1 single-mod baseline: one actual NTT prime is generated near 2^60.
+  // It reuses the single-limb pipeline but is not the paper-default
+  // CONFIG_N2048_K1_COMP path, and PlainMod=14 means log t differs from the
+  // 2025 evaluation cell.
   constexpr size_t PolyDegree   = 2048;
   constexpr size_t L_EP         = 5;
   constexpr size_t L_KEY        = 8;
@@ -64,8 +75,10 @@ namespace DBConsts {
   constexpr std::array<size_t, 2> FirstDimRNSMods = {0, 0};
 
 #elif ACTIVE_CONFIG == CONFIG_N2048_K1_COMP
-  // K=1 composite: pipeline sees single q ≈ 2^58 (= q1*q2 with q1, q2 ~ 2^29).
-  // First-dim matmul splits per-limb to hit the 32x32->64 fast path.
+  // K=1 composite paper path: RnsMods describes one logical q≈2^58, while
+  // FirstDimRNSMods supplies the real 29-bit CRT limbs used only inside the
+  // first-dimension matmul. This keeps Algorithm 1-4 on the single-mod layout
+  // and still lets the hot kernel use 32x32->64 arithmetic.
   constexpr size_t PolyDegree   = 2048;
   constexpr size_t L_EP         = 6;
   constexpr size_t L_KEY        = 10;
@@ -81,7 +94,9 @@ namespace DBConsts {
   constexpr std::array<size_t, 2> FirstDimRNSMods = {29, 29};
 
 #elif ACTIVE_CONFIG == CONFIG_N2048_K2_MP
-  // K=2, N=2048. Single CRT-composed gadget of base B = 2^(58/l).
+  // K=2 MP comparison cell: two real NTT primes are generated from {29, 29}
+  // and composed only where the MP gadget needs logical-q arithmetic. Unlike
+  // CONFIG_N2048_K1_COMP, the whole ciphertext pipeline has two RNS limbs.
   constexpr size_t PolyDegree   = 2048;
   constexpr size_t L_EP         = 5;
   constexpr size_t L_KEY        = 8;
@@ -94,7 +109,7 @@ namespace DBConsts {
   constexpr std::array<size_t, 2> FirstDimRNSMods = {0, 0};
 
 #elif ACTIVE_CONFIG == CONFIG_N4096_K2_MP
-  // K=2 at N=4096. Total log Q ≈ 120 — fits in uint128 (MP gadget). With
+  // K=2 at N=4096. Total log Q ≈ 120 - fits in uint128 (MP gadget). With
   // max_ct_mod_width = 60 the matmul takes the uint64→uint128 scalar path
   // (AVX-512 fast path requires uint32→uint64).
   constexpr size_t PolyDegree   = 4096;
