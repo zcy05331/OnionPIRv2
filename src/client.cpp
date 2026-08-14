@@ -278,7 +278,14 @@ int PirClient::noise_budget(const RlweCt &ct) {
 
 
 RlweCt PirClient::load_resp_from_stream(std::stringstream &resp_stream) {
-  // For now, we only serve the single modulus case.
+  // 这里是 response codec inverse。server 写出的 single-limb small-q ciphertext
+  // 其 layout 是先 c0 coefficients、再 c1 coefficients；每个 coefficient 精确使用
+  // small_q_width bits，bit order 为 LSB-first。恢复出的 ciphertext 是
+  // coefficient-form；query 和 key transport 位于这个 codec 之外。
+  //
+  // 在 Prototype trust boundary 上，expected payload 内部 EOF 会被拒绝，但不会
+  // 检查 expected payload 之后的额外 bytes（包括 padding），也没有
+  // authentication 或 integrity protection。
   const size_t small_q = pir_params_.get_small_q();
   const size_t small_q_width =
       static_cast<size_t>(std::ceil(std::log2(small_q)));
@@ -305,6 +312,8 @@ RlweCt PirClient::load_resp_from_stream(std::stringstream &resp_stream) {
   };
   auto read_coeff = [&](uint64_t &dest) {
     dest = 0;
+    // 位序与 save_resp_to_stream 相同：从下一个 LSB-first stream bit 读取
+    // coefficient 的 bit j，并恢复到 position j。
     for (size_t j = 0; j < small_q_width; ++j)
       dest |= static_cast<uint64_t>(next_bit()) << j;
   };
@@ -317,8 +326,11 @@ RlweCt PirClient::load_resp_from_stream(std::stringstream &resp_stream) {
 
 
 RlwePt PirClient::decrypt_mod_q(const RlweCt &ct) const {
-  // Custom single-mod decryption. Computes phase = c0 + c1*s (mod small_q),
-  // then recovers plaintext via round(phase * t / q) and measures noise.
+  // 这里是 Algorithm 4 response 的 custom small-q decryption。输入是
+  // load_resp_from_stream 恢复出的 single-limb coefficient-form ciphertext。
+  // 其中 ternary secret key 原本在旧 full-q limb 下生成，所以 multiplication 前
+  // get_sk_ntt_small_q 会把 -1 == old_q-1 改写为 small_q-1。随后计算
+  // phase = c0 + c1*s (mod small_q)，plaintext = round(phase*t/small_q)。
   constexpr size_t N = DBConsts::PolyDegree;
   const uint64_t q = pir_params_.get_small_q();
   const uint64_t t = pir_params_.get_plain_mod();

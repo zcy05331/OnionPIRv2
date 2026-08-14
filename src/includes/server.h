@@ -19,9 +19,16 @@ public:
    */
   void gen_data(const std::vector<size_t>& record_indices = {});
 
-  // Given the client id and a packed client query, this function first unpacks the query, then returns the retrieved encrypted result.
+  // 服务端侧的 Algorithm 4 executable skeleton。输入是 QueryPack 生成的
+  // full-q BFV packed query；输出是一条 coefficient-form ciphertext，已经完成
+  // first-dim evaluation、高维 MUX reduction，以及最终 ModSwitch 到 small-q。
+  // 其中 key setup 和 response serialization 位于本函数边界之外。
   RlweCt make_query(const size_t client_id, RlweCt &query);
-  // return the number of bits needed to represent the server reponse
+
+  // 只序列化 small-q response ciphertext：先 c0 后 c1，每个 coefficient
+  // 固定写 small_q_width bits，bit order 为 LSB-first。这个 research prototype
+  // format 无 authentication/integrity；对应 reader side 不检查 payload 后
+  // trailing bytes/padding。
   size_t save_resp_to_stream(const RlweCt &response, std::stringstream &resp_stream);
   void set_client_bv_galois_key(const size_t client_id, bvks::BvGaloisKeys bv_keys);
   void set_client_gsw_key(const size_t client_id, GSWCt gsw_key);
@@ -34,20 +41,26 @@ public:
   RlwePt direct_get_original_plaintext(const size_t index) const;
 
 
-  // high level: homomorphic matrix vector multiplication between plaintext database and query ciphertext
-  // input selection_vector should stay in coefficient form.
-  // output will be in coefficient form.
+  // 对应 Algorithm 4 lines 4-6：在 plaintext database rows 与 first-dim encrypted
+  // one-hot vector 之间做 homomorphic matrix-vector multiplication。输入
+  // selection_vector 保持 coefficient form；输出 candidates 是按剩余维度索引的
+  // coefficient-form BFV ciphertexts。
   std::vector<RlweCt> evaluate_first_dim(std::vector<RlweCt> &selection_vector);
 
   /**
-   * @brief A clever way to evaluate the external product for second to last dimensions.
+   * @brief 处理 Algorithm 4 lines 7-14，用于 remaining dimensions。
    *
-   * @param intermediate_db The BFV ciphertexts after the first dimension evaluation.
-   * @param selectors A vector of RGSW(b) ciphertexts, where b \in {0, 1}. 0 to get the first half of the result, 1 to get the second half.
+   * 其中 intermediate_db 起始为 first dimension 之后的 Nrest encrypted candidates。
+   * 每个 RGSW selector bit 通过 ext_prod_mux 配对前/后半 candidates，消耗一层
+   * 对应 tree layer。deepest level 可能是 ragged：只合并真实有 sibling 的 leaves，
+   * 未配对 candidate 原位保留。输出是 high-dimensional binary index 选中的
+   * 单个 encrypted candidate。
    */
   RlweCt evaluate_other_dim(std::vector<RlweCt> &intermediate_db, std::vector<GSWCt> &selectors);
 
-  // compute x = b * (y - x) + x
+  // 这里是 Homomorphic MUX：select(b, x_orig, y_orig) = x_orig + b*(y_orig-x_orig)。
+  // b=0 保留原始 x，b=1 选择原始 y。实现有意复用 aliasing scratch：参数 y
+  // 会先被改成 y-x，再作为 external product output 复用，最后加回 x。
   void ext_prod_mux(RlweCt &x, RlweCt &y, GSWCt &selection_cipher, RlweCt &result);
 
 
@@ -115,8 +128,9 @@ private:
                               const uint64_t *inter_lo,
                               const uint64_t *inter_hi);
 
-  // customized modulus switch for single mod RlweCt. (Not RNS modulus)
-  // The goal is to halve the size of the ciphertext.
+  // 对应 Algorithm 4 line 15：所有 homomorphic work 完成后，把 full-q response
+  // centered-rescale 到一个 small-q limb，供 response codec 使用。提前 switch
+  // 会损失 noise headroom，并与 full-q evaluation parameters 不匹配。
   void mod_switch_inplace(RlweCt &ciphertext, const uint64_t small_q);
 
 };

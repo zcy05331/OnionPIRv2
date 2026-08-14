@@ -48,10 +48,15 @@ public:
   // gadget-injection artifacts of fast_generate_query.
   RlweCt fresh_zero_ct();
 
-  // load the response from the stream and recover the ciphertext
+  // 仅 response 的 PirServer::save_resp_to_stream inverse：先读 c0 再读 c1，
+  // 每个 coefficient 固定 small_q_width bits，byte/field 内为 LSB-first。
+  // 输出是 single-limb coefficient-form small-q ciphertext；prototype reader
+  // 不做 authentication，也不检查 expected payload 之后的额外 bytes（包括 padding）。
   RlweCt load_resp_from_stream(std::stringstream &resp_stream);
 
-  // Decrypt a single-mod RlweCt under small_q using our custom decryptor.
+  // 解密 single-limb small-q response。ternary secret 会从旧 full-q first limb
+  // 重新编码，使 -1 == old_q-1 变成 small_q-1；随后 phase = c0 + c1*s，
+  // 再 round 回 plaintext mod t。
   RlwePt decrypt_mod_q(const RlweCt &ciphertext) const;
 
 
