@@ -9,7 +9,13 @@
     #include <immintrin.h>
 #endif
 
-// define a structure for a matrix
+// 2025 Algorithm 4 的首维可以按每个 NTT level 独立看成一个标准矩阵乘法：
+//   A[Nrest x N0] * B[N0 x 2] -> C[Nrest x 2]
+// 这里的 N0 是 first dimension，Nrest 是其余维度合并后的候选数。A 是已经
+// NTT 并按 coefficient-major/level-major 重排的 DB；B 是选择向量密文的
+// c0/c1 两列；C 是两个 RLWE 多项式分量的 encrypted candidates。若使用
+// composite/real K，外层 levels/limbs 的数量会变，但这个视图仍是“每个
+// limb、每个 NTT coefficient 一张小矩阵”。
 typedef struct {
     uint64_t *data;
     size_t rows;
@@ -41,12 +47,18 @@ typedef struct {
 
 // ! mat_vec functions means matrix-vector multiplication.
 // It is used for testing the performance of each method. Otherwise,
-// we are doing out = A * B, where A = m * n, B = n * 2, n = DBConsts::MaxFstDimSz
+// we are doing out = A * B, where A = m * n, B = n * 2, n = DBConsts::MaxFstDimSz.
+// level_mat_mat 里的 data layout 是 level-major，然后每个 level 内 row-major：
+//   A[level][candidate_row][first_dim_col]
+//   B[level][first_dim_col][ct_poly_column]
+//   out[level][candidate_row][ct_poly_column]
+// 这正是把 NTT coefficients 当成彼此独立的小矩阵后得到的 kernel layout。
 
 
-// db_coeff_t x db_coeff_t -> inter_coeff_t multiplication, accumulator
-// reduced modulo q periodically to keep the running sum within inter_coeff_t.
-// q == 0 disables the periodic reduction (caller asserts no overflow risk).
+// db_coeff_t x db_coeff_t -> inter_coeff_t multiplication. delayed reduction
+// 只在不会让 accumulator overflow 的 chunk 内累加，chunk 大小由 q 的 bit
+// width 和 inter_coeff_t 宽度保守推出；chunk 之间才 mod q。q == 0 disables
+// the periodic reduction (caller asserts no overflow risk).
 void mat_mat(const db_coeff_t *__restrict A, const db_coeff_t *__restrict B,
     inter_coeff_t *__restrict out, const size_t rows,
     const size_t cols, uint64_t q);
@@ -74,12 +86,15 @@ void level_mat_mat_nochunk_u64(const uint32_t *A_data, const uint32_t *B_data,
 uint32_t level_mat_mat_stream_only(const uint32_t *A_data, size_t m,
                                    size_t n, size_t levels);
 
-// Composite-mod first-dim helper: per-limb 32x32 -> 64 mat-mat under a single
-// scalar modulus q (typically one of q1, q2 with q < 2^32). Wraps the AVX-512
-// SAFE kernel; falls back to scalar 32x32->64 with a single per-output Barrett
-// reduce when AVX-512 is not available. Output is reduced mod q.
+// Composite-mod first-dim helper: logical q = q1*q2 的 NTT values 在首维
+// 投影成两组 uint32 limbs，分别在 q1/q2 下跑 32x32->64 mat-mat，再由
+// inter_to_cts_composite 做 CRT-compose。这里的 split/compose 只属于首维
+// kernel；之后 ciphertext 仍回到 logical K=1、mod q 的表示。AVX-512 path
+// 和 scalar fallback 计算同一个数学输出，但运行时是否启用 SIMD 只由编译
+// target 决定。
 //   A   : m x n, layout matches level_mat_mat (level-major, row-major)
-//   B   : n x 2 (interleaved [B0_k, B1_k]), one level
+//   B   : per level, B[level] is n x 2 (interleaved [B0_k, B1_k]);
+//         overall B_data is level-major
 //   out : m x 2 per level (interleaved)
 //   levels : number of levels, must match A
 //   q   : single modulus shared across all levels

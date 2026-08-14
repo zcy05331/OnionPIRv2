@@ -14,11 +14,13 @@ static void level_mat_mat_avx512_safe(const uint32_t *A_data,
                                       size_t levels, const uint64_t *level_qs);
 #endif
 
-// Pick a chunk size that keeps the unreduced accumulator inside inter_coeff_t.
-// Each per-row inner loop accumulates up to `chunk` products. With a leading
-// `acc < q` term carried from the prior chunk, the running sum is bounded by
+// delayed reduction 的核心不改变标准矩阵乘法，只改变何时做 mod q：每个
+// output cell 先在 accumulator 可承受的 chunk 内累加若干 A[i,k]*B[k,j]，
+// chunk 结束后再 reduce。因为前一段会留下 acc < q，下一段最坏界为
 //     acc + chunk · q² < q + chunk · q²,
-// so chunk ≤ (MAX_ACC - q) / q².
+// 所以 chunk ≤ (MAX_ACC - q) / q²。这里按 inter_coeff_t 的真实宽度保守
+// 推导；不同 kernel 可能用 uint64、uint128 或 SIMD lane accumulator，不能
+// 把它们笼统说成同一个 accumulator。
 static inline size_t pick_chunk(uint64_t q, size_t cols) {
   if (q == 0) return cols;
   const inter_coeff_t MAX_ACC = ~static_cast<inter_coeff_t>(0);
@@ -38,9 +40,9 @@ void mat_mat(const db_coeff_t *__restrict A, const db_coeff_t *__restrict B,
   const size_t chunk = pick_chunk(q, cols);
 
   if (chunk >= cols) {
-    // Single-pass: caller has guaranteed accumulator can't overflow. q==0
-    // disables reduction (debug); otherwise reduce once at the end so every
-    // mat_mat output is < q (inter_to_cts relies on this invariant).
+    // Single-pass scalar path：pick_chunk 证明整个 inner dimension 可在
+    // inter_coeff_t 内完成；q==0 是 debug/no-mod 入口，否则每个 C[i,0/1]
+    // 在写出前 reduce 到 < q，inter_to_cts 依赖这个 invariant。
     const inter_coeff_t qi = static_cast<inter_coeff_t>(q);
     for (size_t i = 0; i < rows; i++) {
       inter_coeff_t t0 = 0, t1 = 0;
@@ -56,9 +58,9 @@ void mat_mat(const db_coeff_t *__restrict A, const db_coeff_t *__restrict B,
     return;
   }
 
-  // Chunked accumulation with mod-q reduction between chunks. For uint64
-  // accumulators (K=2 cell), Barrett-u64 is ~1.7× faster than `% q`. For
-  // uint128 accumulators (K=1 cell), the compiler's __umodti3 / built-in
+  // Chunked scalar path：每段只累加不会 overflow 的 products，段间 mod q。
+  // For uint64 accumulators (K=2 cell), Barrett-u64 is ~1.7× faster than `% q`.
+  // For uint128 accumulators (K=1 cell), the compiler's __umodti3 / built-in
   // uint128 mod already beats Barrett-u128 in this loop, so keep `%`.
   if constexpr (std::is_same_v<inter_coeff_t, uint64_t>) {
     const auto bar = utils::barrett_u64_setup(q);
@@ -108,6 +110,13 @@ void level_mat_mat(db_matrix_t *A, db_matrix_t *B, inter_matrix_t *out,
   const size_t levels = A->levels;
 
 #if defined(__AVX512F__)
+  // 每个 level 是 Algorithm 4 首维的一张小矩阵：
+  //   A[level] = DB[Nrest x N0],
+  //   B[level] = query selection vector[N0 x 2] (BFV c0/c1),
+  //   out[level] = encrypted candidates[Nrest x 2].
+  // level-major 把 NTT coefficients 视作互不相干的小矩阵；outer loop 只是在
+  // limb/coefficient 维度上重复同一个 standard matrix multiplication。
+  //
   // AVX-512 32->64 fast path. Triggers when db_coeff_t = uint32_t and
   // inter_coeff_t = uint64_t (max_ct_mod_width() ≤ 32, the K=2 28-29-bit cell).
   // Inputs are NTT outputs already reduced mod q. Per-lane bound:
@@ -215,11 +224,11 @@ void level_mat_mat_nochunk_u64(const uint32_t *A_data, const uint32_t *B_data,
 #if defined(__AVX512F__)
 #include <immintrin.h>
 
-// AVX-512 32->64 mat-mat. Inputs MUST be reduced mod q on entry. Per-lane
-// uint64 accumulator stays bounded since each of 16 lanes accumulates only
-// ⌈n/16⌉ products, requiring ⌈n/16⌉ · q² < 2⁶⁴ (holds for q < 2³⁰, n ≤ 1024).
-// Final 16-lane horizontal sum widens to uint128 + Barrett for one mod-q per
-// output element. See level_mat_mat dispatch for the bound check.
+// AVX-512 32->64 mat-mat。它与 scalar mat_mat 计算同一个 C[level][row][0/1]，
+// 但 delayed reduction 的 accumulator 形态不同：每个 SIMD lane 只累加
+// ⌈n/16⌉ 个 32x32 products 到 uint64，要求 ⌈n/16⌉ · q² < 2^64；水平求和时
+// 再 widen 到 uint128 并 Barrett reduce。Inputs MUST be reduced mod q on entry.
+// See level_mat_mat dispatch for the bound check.
 static inline uint64_t hsum_to_u128_mod(__m512i v, const utils::BarrettU128 &b) {
   alignas(64) uint64_t buf[8];
   _mm512_store_si512((__m512i*)buf, v);
@@ -266,7 +275,8 @@ static inline void mat_mat_avx512_safe(const uint32_t *__restrict A,
 }
 
 // Per-level wrapper: deinterleaves B once (cheap vs full matmul), then runs
-// the AVX-512 mat-mat per level.
+// the AVX-512 mat-mat per level. B 的原 layout 是 [c0,c1] interleaved；这里
+// 分成 B0/B1 只是为了 SIMD load，数学上仍是 B[N0 x 2]。
 static void level_mat_mat_avx512_safe(const uint32_t *A_data,
                                       const uint32_t *B_data,
                                       uint64_t *out_data, size_t m, size_t n,
@@ -306,15 +316,18 @@ void level_mat_mat_32(const uint32_t *A_data, const uint32_t *B_data,
                       uint64_t *out_data, size_t m, size_t n, size_t levels,
                       uint64_t q) {
 #if defined(__AVX512F__)
-  // Reuse the K=2 AVX-512 SAFE path with a uniform per-level q. Bound check:
-  // ⌈n/16⌉ · q² < 2^64. With q ~ 2^29 and n=512, that's 32 · 2^58 = 2^63 < 2^64.
+  // Composite first-dim 的每个 limb 复用同一 32x32->64 kernel，uniform q 是
+  // q1 或 q2。Safety condition: ⌈n/16⌉ · q² < 2^64; current composite
+  // params satisfy it. With q ~ 2^29 and n=512, that's
+  // 32 · 2^58 = 2^63 < 2^64.
   std::vector<uint64_t> level_qs(levels, q);
   level_mat_mat_avx512_safe(A_data, B_data, out_data, m, n, levels,
                             level_qs.data());
   return;
 #else
-  // Scalar fallback. Per-output Barrett reduce; uint64 accumulator stays
-  // within bounds for the same reason as the AVX path (n · q² < 2^64).
+  // Scalar fallback。数学输出与 AVX-512 path 相同；这里只是不使用 SIMD lane
+  // 拆分，直接在 uint64 accumulator 中累加整条 inner dimension，再做一次
+  // per-output Barrett reduce。当前 composite 参数使 n · q² < 2^64。
   const auto b64 = utils::barrett_u64_setup(q);
   for (size_t level = 0; level < levels; ++level) {
     const uint32_t *A_ptr = A_data + level * (m * n);

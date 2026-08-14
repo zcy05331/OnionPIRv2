@@ -48,10 +48,16 @@ PirServer::~PirServer() {
 }
 
 // Fills the database with random data.
+// Offline DB preprocessing 对应 2025 Algorithm 4 的 A 矩阵准备：每个 plaintext
+// polynomial 先变成 NTT form，然后从 plaintext-major [pt][coeff] 转成
+// coefficient-major [limb/NTT coefficient][pt]。这样在固定 (limb, NTT
+// coefficient) 下，所有 DB entries 按 first dimension 连续存放，首维 kernel
+// 做 linear scan 时 A[row][k] 是顺序访问。
 // Streams plaintexts in tiles: for each tile we generate random coefficients,
 // record any tagged for verification, NTT under each q_k, and transpose-scatter
-// into db_aligned_ — then drop the tile buffer. This keeps peak RAM at
-// ~|db_aligned_| (one copy) rather than 2x (full pre-NTT plaintext array).
+// into coefficient-major DB buffers — standard path writes db_aligned_, while
+// composite path writes db_lo_/db_hi_. Then drop the tile buffer. tile staging
+// 只保留少量 pre-NTT plaintexts，避免同时持有整份 pre-NTT DB 和重排后的 DB。
 // record_indices: indices of plaintexts to save (pre-NTT) for test verification.
 void PirServer::gen_data(const std::vector<size_t>& record_indices) {
   BENCH_PRINT("Generating random data for the server database...");
@@ -122,7 +128,10 @@ void PirServer::gen_data(const std::vector<size_t>& record_indices) {
 
     // Standard path: NTT each plaintext under each q_k into stage, then
     // tile-transpose-write into db_aligned_. Layout matches the matmul:
-    // db_aligned_[coeff_idx * num_pt_ + poly_id], coeff_idx in [0, K*N).
+    // db_aligned_[level * num_pt_ + poly_id], level = k*N + coeff_idx.
+    // evaluate_first_dim later views one level slice as A[Nrest x N0], where
+    // consecutive poly_id values are the N0 scan dimension for a fixed candidate
+    // row and fixed NTT coefficient.
     for (size_t k = 0; k < K; ++k) {
       const uint64_t qk = rns_mods[k];
       uint64_t *limb_base = stage.data() + k * TILE * coeff_count;
@@ -157,7 +166,13 @@ void PirServer::prep_query(std::vector<RlweCt> &fst_dim_query,
   const size_t K = rns_mods.size();
   constexpr size_t N = DBConsts::PolyDegree;
  
-  // transform the selection vector to ntt form
+  // prep_query 把 ciphertext-major query 转成 first-dim kernel layout。输入是
+  // fst_dim_query[i].c0/c1，每个 i 是 selection vector 的一个 BFV ciphertext；
+  // 先对每个 RNS limb 做 NTT，然后按 level-major 写成
+  //   query_data[level][i][0/1] = B[i][c0/c1].
+  // 因而每个 NTT level 的标准矩阵乘法都是
+  //   A[Nrest x N0] * B[N0 x 2] -> C[Nrest x 2].
+  // 若 K>1，level = limb*N + coeff；这是 per-limb/per-level 视图。
   for (size_t i = 0; i < fst_dim_query.size(); i++) {
     RlweCt &ct = fst_dim_query[i];
     for (size_t mod_id = 0; mod_id < K; mod_id++) {
@@ -210,6 +225,10 @@ void PirServer::prep_query_composite(const std::vector<RlweCt> &fst_dim_query,
   const uint64_t q1 = crt.q1;
   const uint64_t q2 = crt.q2;
 
+  // Composite query 已在 evaluate_first_dim 中按 logical q=q1*q2 进入 NTT。
+  // 这里只做首维 kernel 需要的投影：同一 B[N0 x 2] 分别取 mod q1/q2，写入
+  // 两组 uint32 level-major buffers。后续两个 32x32->64 kernels 的输出会在
+  // inter_to_cts_composite 里 CRT-compose 回 logical mod q。
   std::vector<const uint64_t *> data0_ptrs(fst_dim_sz);
   std::vector<const uint64_t *> data1_ptrs(fst_dim_sz);
   for (size_t i = 0; i < fst_dim_sz; ++i) {
@@ -239,9 +258,13 @@ void PirServer::prep_query_composite(const std::vector<RlweCt> &fst_dim_query,
   }
 }
 
-// Computes a dot product between the fst_dim_query and the database for the
-// first dimension with a delayed modulus optimization. fst_dim_query should
-// be transformed to ntt.
+// Computes Algorithm 4 first dimension as batched standard matrix
+// multiplication over NTT levels. For each limb/coefficient level:
+//   A = DB values with shape [other_dim_sz x fst_dim_sz],
+//   B = BFV selection vector columns [fst_dim_sz x 2] (c0/c1),
+//   C = encrypted candidates [other_dim_sz x 2].
+// delayed modulus optimization lives inside the matmul kernels: they accumulate
+// only as far as the accumulator width allows, then reduce mod q.
 std::vector<RlweCt>
 PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();  // number of plaintexts in the first dimension
@@ -254,9 +277,12 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
 
   const auto &crt = pir_params_.get_composite_rns();
   if (crt.enabled) {
-    // Composite path: NTT each fst_dim_query under q = q1*q2 (single mod),
-    // split DB & query into (mod q1, mod q2) u32 limbs, run two parallel
-    // 32x32->64 matmuls, CRT-compose results back to mod q, then INTT mod q.
+    // Composite path: logical ciphertext modulus q=q1*q2 has pipeline K()==1, so
+    // queries are NTTed once under q. Only the first-dim kernel splits DB/query
+    // NTT values into two uint32 projections (mod q1 and mod q2), then runs
+    // the same 32x32->64 kernel under q1 and q2 to compute residue outputs.
+    // inter_to_cts_composite CRT-composes those residues back to logical mod q
+    // before INTT. Later PIR stages still see K=1 ciphertexts.
     const uint64_t q = rns_mods[0];
     for (size_t i = 0; i < fst_dim_query.size(); ++i) {
       RlweCt &ct = fst_dim_query[i];
@@ -299,9 +325,15 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   TIME_END(FST_DIM_PREP);
 
   /*
-  Imagine DB as a (other_dim_sz * fst_dim_sz) matrix, where each element is a
-  vector of size coeff_val_cnt. In OnionPIRv1, the first dimension is doing the
-  component wise matrix multiplication. Further details can be found in the "matrix.h" file.
+  Standard path for 2025 Algorithm 4: instead of treating each DB matrix entry
+  as a vector and doing component-wise vector products, we peel off the vector
+  dimension. For every NTT level independently:
+      db_mat[level]    = A[other_dim_sz x fst_dim_sz]
+      query_mat[level] = B[fst_dim_sz x 2]  (BFV c0/c1 selection vector)
+      inter_res[level] = C[other_dim_sz x 2]
+  This is why the first PIR dimension is exactly a standard matrix
+  multiplication kernel; coefficient-major DB preprocessing makes the inner
+  fst_dim_sz scan contiguous.
   */
   // prepare the matrices
   db_matrix_t db_mat { db_aligned_.get(), other_dim_sz, fst_dim_sz, coeff_val_cnt };
@@ -336,6 +368,13 @@ void PirServer::inter_to_cts(std::vector<RlweCt> &result, const inter_coeff_t *_
   const size_t coeff_val_cnt = coeff_count * K;
   const size_t inter_padding = other_dim_sz * 2;  // distance between coefficients in inter_res
 
+  // inter_res 的实际 stride 是 C[level][candidate][poly]，也就是
+  // level-major 后接 candidate，再接 c0/c1 两列：
+  //   inter_res[level * other_dim_sz * 2 + candidate * 2 + poly].
+  // inter_to_cts 做的是 transpose/gather，把它变成
+  //   RlweCt[candidate].c{0,1}[level].
+  // gather 后每个 ciphertext 仍在 NTT form，随后逐 limb INTT 回 coefficient form。
+  //
   // We need to unroll the loop to process multiple ciphertexts at once.
   // Otherwise, this function is basically reading the intermediate result
   // with a stride of inter_padding, which causes many cache misses.
@@ -454,6 +493,11 @@ void PirServer::inter_to_cts_composite(std::vector<RlweCt> &result,
   constexpr size_t coeff_count = DBConsts::PolyDegree;
   const size_t inter_padding = other_dim_sz * 2;
 
+  // Composite inter_res_lo/hi 使用同样的 C[level][candidate][poly] stride；
+  // logical K=1，所以 level 就是 NTT coefficient。这里先把 lo/hi 两个 limb 做
+  // CRT-compose 得到 mod q 的 RlweCt[candidate].c{0,1}[coeff_id]，再 INTT
+  // 回 coefficient form。split 和 compose 都只包围首维 matmul。
+  //
   // Garner CRT compose: (lo, hi) → lo + q1 * ((hi − lo) · q1_inv mod q2).
   // Since q1, q2 < 2^29, diff·q1_inv stays under 2^58 — no 128-bit mul.
   auto compose = [q1, q2, q1_inv_mod_q2](uint64_t lo, uint64_t hi) -> uint64_t {
@@ -892,7 +936,6 @@ void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
     ciphertext.c1.resize(coeff_count);
   }
 }
-
 
 
 
