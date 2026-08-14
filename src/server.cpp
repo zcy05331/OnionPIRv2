@@ -608,7 +608,13 @@ void PirServer::ext_prod_mux(RlweCt &x, RlweCt &y, GSWCt &selection_cipher, Rlwe
     TIME_END(OTHER_DIM_ADD_SUB);
 }
 
-//  single-loop level-order expansion  (root index = 1)
+// Algorithm 2 ExpandBFV，按单次 level-order heap walk 实现（root index = 1）。
+// 输入是一条 coefficient-form、K-limb、full-q packed BFV query。输出前
+// u = N0 + L_EP * (d - 1) 个 constant BFV ciphertexts：先是 N0 个 first-dim
+// one-hot slots，再是每个高维 selector 对应的 L_EP rows。client-side BitRev
+// packing 与这里的 leaf order 配套，因此 leaf i 解密到 BitRev(i) 处写入的
+// constant。位于 u 右侧的 internal nodes 在 Subs 前被 pruned，因为它们只会
+// 生成未使用的 zero leaves。
 std::vector<RlweCt>
 PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
   // ============== parameters
@@ -663,11 +669,13 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
   for (size_t i = 1; i < capacity; ++i) { // internal nodes only
     const int k = int{1} << (std::bit_width(i) - 1); // k = 2^{⌊log i⌋}   (span of this sub-tree)
 
+    // 当前 heap subtree 覆盖的第一个 returned leaf；>= u 时整棵 subtree 可跳过。
     const size_t left_leaf = i * capacity / k - capacity;
     if (left_leaf >= useful_cnt)
       continue;
 
     RlweCt c_prime = cts[i];
+    // σ_{N/k+1}: 当前 split level 对应的 Algorithm 2 automorphism。
     const uint32_t galois_k = DBConsts::PolyDegree / k + 1;
     TIME_START(APPLY_GALOIS);
     bvks::bv_apply_galois_inplace(c_prime, galois_k,
@@ -684,7 +692,7 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
     TIME_END("shift polynomial");
   }
 
-  // ==============  return the first  u  leaves: heap slots  capacity … capacity+u−1
+  // ============== return useful leaf slice: heap slots capacity … capacity+u−1
   return std::vector<RlweCt>(
       std::make_move_iterator(cts.begin() + capacity),
       std::make_move_iterator(cts.begin() + capacity + useful_cnt));

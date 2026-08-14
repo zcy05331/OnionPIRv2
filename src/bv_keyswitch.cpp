@@ -22,7 +22,7 @@ void signed_gadget_decompose(uint64_t val, size_t base_log2,
   const uint64_t half_q = q >> 1;
   const int64_t nativeSubgBits = 64 - static_cast<int64_t>(base_log2);
 
-  // Center: [0, q) → (-q/2, q/2]
+  // Center: [0, q) -> (-q/2, q/2]
   int64_t d = (val > half_q)
       ? static_cast<int64_t>(val) - static_cast<int64_t>(q)
       : static_cast<int64_t>(val);
@@ -239,7 +239,9 @@ BvKeySwitchKey gen_bv_ks_key(const PirParams &pir_params,
   BvKeySwitchKey ksk;
   ksk.galois_k = galois_k;
 
-  // MP gadget: L_KS rows, each row encrypts σ(s) · B^i under all K limbs.
+  // MP gadget: L_KS rows，每个 row 在所有 K limbs 下加密 σ_k(s) * B^i。
+  // rows 是 NTT-form、limb-major；后续 BV apply 把 row.b MAC 到 RlweCt.c0，
+  // 把 row.a MAC 到 RlweCt.c1，匹配主路径的 (c0,c1) 命名。
   const size_t base_log2 = bv_base_log2(pir_params);
   ksk.cts.resize(L_KS);
   std::vector<uint64_t> msg(N * K);
@@ -286,7 +288,11 @@ struct GaloisScratch {
 static GaloisScratch g_scratch;
 }  // namespace
 
-// K=1: signed gadget decomposition (existing path, tighter noise).
+// K=1 BV Subs path。先对 (c0,c1) 做 coefficient-wise automorphism，得到
+// secret 为 σ_k(s) 的 ciphertext。随后把 σ_k(c1) 按 mod q centered，做
+// signed decomposition；每个 digit block 转 NTT 后与对应 KSK row 做
+// pointwise MAC。INTT 后 accumulated row.b/row.a 回到 coefficient form；
+// row.b 加到 σ_k(c0)，row.a 成为切回 secret s 后的新 c1。
 static void bv_apply_galois_inplace_k1(RlweCt &ct, uint32_t galois_k,
                                        const BvKeySwitchKey &key,
                                        const PirParams &pir_params) {
@@ -360,9 +366,10 @@ static void bv_apply_galois_inplace_k1(RlweCt &ct, uint32_t galois_k,
   std::memcpy(ct.data(1), delta_a, N * sizeof(uint64_t));
 }
 
-// K=2: unsigned MP-gadget decomposition. Composes σ(c1) per coefficient to a
-// 128-bit MP integer, extracts L_KS digits in [0, B), then for each limb NTTs
-// each digit independently and accumulates the inner product against the KSK.
+// K=2 BV Subs path。automorphism 仍然逐 limb 执行，但 decomposition 不能逐
+// limb 独立做：必须先把 σ_k(c1) CRT-compose 成 modulo Q=q0*q1 的单个值，
+// 再 centered 并 signed-decompose 一次。同一个 signed digit 分别 render 到
+// q0 和 q1 后进入 NTT/MAC，因此两个 limbs 共享同一次 full-q decomposition。
 static void bv_apply_galois_inplace_k2(RlweCt &ct, uint32_t galois_k,
                                        const BvKeySwitchKey &key,
                                        const PirParams &pir_params) {
@@ -385,7 +392,7 @@ static void bv_apply_galois_inplace_k2(RlweCt &ct, uint32_t galois_k,
   }
   TIME_END(APPLY_GAL_SIGMA);
 
-  // Step 2 + 3: per-coef CRT compose σ(c1) → 128-bit MP integer, then signed
+  // Step 2 + 3: per-coef CRT compose σ(c1) -> 128-bit MP integer, then signed
   // base-B decomposition with carry. Both bundled under DECOMP since they're
   // the variant-specific gadget extraction work.
   TIME_START(APPLY_GAL_DECOMP);
@@ -409,8 +416,8 @@ static void bv_apply_galois_inplace_k2(RlweCt &ct, uint32_t galois_k,
   }
   TIME_END(APPLY_GAL_DECOMP);
 
-  // Step 4: for each limb, NTT each digit (rendered into uint64 mod qk) and
-  // accumulate inner products against the KSK.
+  // Step 4: 对每个 limb，把共享 signed digit render 成 uint64 mod qk，转 NTT，
+  // 再累加 KSK 的 row.b/row.a inner products。
   std::vector<uint64_t> delta_a(2 * N, 0), delta_b(2 * N, 0);
   std::vector<uint64_t> digit_buf(N), prod(N);
 
@@ -482,6 +489,9 @@ void bv_apply_galois_inplace(RlweCt &ct, uint32_t galois_k,
 
   constexpr size_t K = DBConsts::RnsMods.size();
 
+  // Dispatcher invariant：ct 进入和返回都保持 coefficient form。K=1 可以直接
+  // modulo q centered/decompose；K=2 必须先 CRT-compose 到 Q=q0*q1，再把同一组
+  // signed digits 分别落回两个 limbs。
   if constexpr (K == 1) {
     bv_apply_galois_inplace_k1(ct, galois_k, key, pir_params);
   } else {
