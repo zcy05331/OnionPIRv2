@@ -725,13 +725,21 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   std::vector<RlweCt> query_vector = fast_expand_qry(client_id, query);
   TIME_END(EXPAND_TIME);
 
-  // Reconstruct RGSW queries
+  // Reconstruct Algorithm 3 / QueryUnpack RGSW selectors from the expanded BFV
+  // stream. fast_expand_qry returns:
+  //   [0, N0)                         first-dimension BFV vector
+  //   [N0 + (i-1)*L_EP, N0 + i*L_EP) selector top half for that later dim
+  // Each later dimension contributes exactly L_EP BFV ciphertexts, already
+  // aligned with the MSB-first gadget rows used by QueryPack/RGSW layout.
   TIME_START(CONVERT_TIME);
   const size_t l_ep = pir_params_.get_l();
   std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSW ciphertexts
   if (pir_params_.get_num_dims() != 1) {  // if we do need futher dimensions
     for (size_t i = 1; i < pir_params_.get_num_dims(); i++) {
-      // l_ep RLWE ciphertexts per dim (one per gadget power).
+      // Copy the selector's top L_EP rows out of the expanded vector. The
+      // completion key stored in client_gsw_keys_ is RGSW(s) and was generated
+      // with L_KEY; query_to_gsw uses it only to derive the bottom half. The
+      // resulting selector consumed by data external products has 2*L_EP rows.
       std::vector<RlweCt> lwe_vector;
       lwe_vector.reserve(l_ep);
       for (size_t k = 0; k < l_ep; ++k) {
