@@ -801,7 +801,7 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   // aligned with the MSB-first gadget rows used by QueryPack/RGSW layout.
   TIME_START(CONVERT_TIME);
   const size_t l_ep = pir_params_.get_l();
-  std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSW ciphertexts
+  std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSWCt containers；prose 语义是 RGSW selectors
   if (pir_params_.get_num_dims() != 1) {  // if we do need futher dimensions
     for (size_t i = 1; i < pir_params_.get_num_dims(); i++) {
       // Copy the selector's top L_EP rows out of the expanded vector. The
@@ -814,7 +814,7 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
         auto ptr = pir_params_.get_fst_dim_sz() + (i - 1) * l_ep + k;
         lwe_vector.push_back(query_vector[ptr]);
       }
-      // Converting the BFV ciphertexts to GSW ciphertext by doing external product
+      // 用 expanded BFV top rows completion 成完整 RGSW selector ciphertext。
       key_gsw_.query_to_gsw(lwe_vector, client_gsw_keys_[client_id], gsw_vec[i - 1]);
     }
   }

@@ -39,7 +39,8 @@ public:
 
   inline size_t get_client_id() const { return client_id_; }
 
-  // Noise budget via a bridge to SEAL's invariant_noise_budget (debug/test only).
+  // Debug/diagnostic first-limb phase/noise estimate. This is not K-aware and
+  // is not SEAL-backed invariant_noise_budget.
   int noise_budget(const RlweCt &ct);
 
 
@@ -51,7 +52,9 @@ public:
   // 仅 response 的 PirServer::save_resp_to_stream inverse：先读 c0 再读 c1，
   // 每个 coefficient 固定 small_q_width bits，byte/field 内为 LSB-first。
   // 输出是 single-limb coefficient-form small-q ciphertext；prototype reader
-  // 不做 authentication，也不检查 expected payload 之后的额外 bytes（包括 padding）。
+  // 不做 authentication，也不验证 decoded coefficient < small_q，且不检查
+  // expected payload 之后的额外 bytes（包括 padding）。decrypt path 后续按
+  // small_q 取模/规约。
   RlweCt load_resp_from_stream(std::stringstream &resp_stream);
 
   // 解密 single-limb small-q response。ternary secret 会从旧 full-q first limb

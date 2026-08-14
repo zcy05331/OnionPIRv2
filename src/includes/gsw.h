@@ -12,7 +12,8 @@
 // limb-major layout: [q0 的 N coefficients][q1 的 N coefficients]...
 // external_product 会把输入 BFV/RLWE 的 c0、c1 分解成 2*l digit rows，
 // 作为 [1 x 2*l] 向量乘上这个 [2*l x 2] RGSW matrix，输出一个 BFV/RLWE
-// ciphertext。GSWCt rows 通常预先在 NTT domain；分解 rows 会在乘法前转 NTT。
+// ciphertext。C++ container type is GSWCt; prose uses RGSW selector/ciphertext.
+// GSWCt rows 通常预先在 NTT domain；分解 rows 会在乘法前转 NTT。
 typedef std::vector<std::vector<uint64_t>> GSWCt;
 
 class GSWEval {
@@ -72,13 +73,13 @@ class GSWEval {
                       LogContext context = LogContext::GENERIC);
 
     /*!
-      Generates a GSW ciphertext from a BFV ciphertext query.
+      Generates RGSW selector ciphertext rows from a BFV ciphertext query.
 
       @param query - query.size() top-half BFV ciphertext rows (L_EP rows in the
                      data-selector path); output is resized to 2*query.size()
                      RGSW rows after completion.
       @param gsw_key - RGSW encryption of s
-      @param output - output to store the GSW ciphertext as a vector of vectors of
+      @param output - output to store the RGSW ciphertext as a vector of vectors of
       polynomial coefficients
     */
     void query_to_gsw(std::vector<RlweCt> query, GSWCt gsw_key,
@@ -96,6 +97,6 @@ class GSWEval {
     GSWCt plain_to_gsw(std::vector<uint64_t> const &plaintext,
                                const RlweSk &sk, std::mt19937_64 &rng);
 
-    // Transform the given GSWCipher text from polynomial representation to NTT representation.
+    // Transform the given GSWCt from polynomial representation to NTT representation.
     void gsw_ntt_forward(GSWCt &gsw);
 };

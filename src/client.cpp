@@ -264,9 +264,9 @@ RlweCt PirClient::fresh_zero_ct() {
 }
 
 int PirClient::noise_budget(const RlweCt &ct) {
-  // Single-mod budget under the first limb. Used as a pre-mod-switch indicator
-  // (the K-aware decrypt_rns path does not expose noise; this matches the K=1
-  // historical behaviour and is good enough as a debug signal).
+  // Debug/diagnostic single-mod estimate under the first limb. It derives a
+  // phase/noise estimate from the K=1-style path; the K-aware decrypt_rns path
+  // does not expose noise and this is not SEAL-backed invariant_noise_budget.
   const uint64_t q = pir_params_.get_rns_mods()[0];
   const uint64_t t = pir_params_.get_plain_mod();
   RlwePt tmp;
@@ -284,8 +284,9 @@ RlweCt PirClient::load_resp_from_stream(std::stringstream &resp_stream) {
   // coefficient-form；query 和 key transport 位于这个 codec 之外。
   //
   // 在 Prototype trust boundary 上，expected payload 内部 EOF 会被拒绝，但不会
-  // 检查 expected payload 之后的额外 bytes（包括 padding），也没有
-  // authentication 或 integrity protection。
+  // 验证 decoded coefficient < small_q，也不检查 expected payload 之后的额外
+  // bytes（包括 padding），且没有 authentication 或 integrity protection。
+  // decrypt path 后续会按 small_q 对 c0/c1 取模/规约。
   const size_t small_q = pir_params_.get_small_q();
   const size_t small_q_width =
       static_cast<size_t>(std::ceil(std::log2(small_q)));
