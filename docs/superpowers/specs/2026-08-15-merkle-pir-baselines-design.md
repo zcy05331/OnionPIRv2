@@ -22,9 +22,10 @@ path naive baselines，并与标准 OnionPIRv2 在同一台机器、同一个构
 | 项目 | 决策 |
 |---|---|
 | Merkle node | 固定 32 bytes |
-| 性能树规模 | `leaf_count = 2^21`，`tree_height = 21` |
-| Path 内容 | 查询 level `21..1` 的 21 个 sibling；root 不存储、不查询 |
-| PIR 配置 | `CONFIG_N2048_K1_COMP` / `k1_comp` |
+| 性能树规模 | 主跑 `leaf_count = 2^24`，`tree_height = 24`，对齐 OnionPIRv2 论文 1 GB 评测行 |
+| 可选扩展规模 | `leaf_count = 2^27`，`tree_height = 27`，对齐论文 8 GB 评测行；仅在内存门控通过时运行 |
+| Path 内容 | 查询 level `H..1` 的 `H` 个 sibling；root 不存储、不查询 |
+| PIR 配置 | `CONFIG_N2048_K1_COMP` / `k1_comp`，对齐 OnionPIRv2 论文 4.1 节参数 |
 | 性能轮次 | 3 次 warmup + 5 次 measured trials |
 | 运行后端 | Apple M4 上的 `x86_64 + Intel HEXL + Rosetta 2` |
 | ARM64 | 不在本分支适配；所有结果标记为非 ARM64 原生性能 |
@@ -34,6 +35,32 @@ path naive baselines，并与标准 OnionPIRv2 在同一台机器、同一个构
 | 通信真实性 | query/helper keys 使用仓库现有 seed-compressed 模型；response 使用实际 codec 字节数 |
 | Hash | 不增加 hash dependency；使用确定性 synthetic 32-byte node |
 | 计时主口径 | server online compute；另报本地 query/codec/decrypt 分项与本地 pipeline 时间 |
+| 资源门控 | 当前 16 GiB Apple M4 环境必须完成 1 GB 主跑；8 GB 行预计因预处理存储约 42.7 GiB 而默认跳过并报告 skip reason |
+
+### 论文参数对齐
+
+`k1_comp` 不是随便选的“能跑配置”，而是这条分支的论文锚点。对齐目标是
+`2025-1142.pdf` 中 OnionPIRv2 论文第 4.1 节和第 4.3 节的代表性参数组：
+
+- `n = 2048`
+- `log q ≈ 58`
+- `log t = 13`
+- `log q' = 22`
+- `L_KEY = 10`
+- `L_EP = 6`
+- `L_KS = 8`
+- `σ = 2.55`
+
+实现里 `PlainMod = 13` 表示生成一个 13-bit 目标 plaintext modulus；编码时每个
+coefficient 只承载 `PlainMod - 1 = 12` 个 payload bits，因此一个 2048-coefficient
+plaintext 的有效 payload 仍是 3072 bytes，也就是论文里评测的 3 KB entry 尺寸。
+
+2021 版 OnionPIR 的参数集只保留作历史背景，不进入这条实现分支。
+
+论文第 4.3 节报告两行数据库规模：1 GB 和 8 GB。当前机器是 16 GiB Apple M4；
+在 `k1_comp` 下，预处理数据库存储约为 logical payload 的 `2048*8/3072 = 5.33x`。
+因此 1 GB 主跑可作为默认必跑项，8 GB 行只作为 resource-gated optional run，
+若未运行必须在 JSON 和报告中标记为 `skipped_resource_limit`。
 
 ## 非目标
 
@@ -62,19 +89,31 @@ nodes per plaintext          = 3072 / 32 = 96
 max query expansion height   = 10
 ```
 
-`2^21` 叶子的完整二叉树有 `2^22 - 1` 个节点。root 不进入 PIR database，
+`2^24` 叶子的完整二叉树有 `2^25 - 1` 个节点。root 不进入 PIR database，
 因此：
 
 ```text
-non_root_node_count = 2^22 - 2 = 4,194,302
-raw_merkle_bytes    = 4,194,302 * 32 = 134,217,664
-                     = 128 MiB - 64 bytes
-target_plaintexts   = ceil(4,194,302 / 96) = 43,691
+non_root_node_count = 2^25 - 2 = 33,554,430
+raw_merkle_bytes    = 33,554,430 * 32 = 1,073,741,760
+                     = 1 GiB - 64 bytes
+target_plaintexts   = ceil(33,554,430 / 96) = 349,526
 ```
 
 使用当前 `k1_comp` shape policy 和 expansion height 10 时，flat/standard 的
-实际 shape 为 44,032 plaintexts，即 129 MiB logical padded payload。标准
-OnionPIRv2 必须直接复用这一 shape，而不是仅使用另一个“约 128 MiB”的近似值。
+实际 shape 为 349,696 plaintexts，即 1024.5 MiB logical padded payload。标准
+OnionPIRv2 必须直接复用这一 shape，而不是仅使用另一个“约 1 GB”的近似值。
+
+可选 8 GB 行使用 `2^27` leaves：
+
+```text
+non_root_node_count = 2^28 - 2 = 268,435,454
+raw_merkle_bytes    = 8 GiB - 64 bytes
+target_plaintexts   = ceil(268,435,454 / 96) = 2,796,203
+actual_shape        = 2,796,544 plaintexts = 8193 MiB logical padded payload
+```
+
+这条可选行的预处理 coefficient storage 约为 `8193 MiB * 5.33 = 42.7 GiB`，
+不得在 16 GiB 机器上作为默认必跑 benchmark。
 
 ## Merkle 索引与布局
 
@@ -133,8 +172,8 @@ codec 将 96 个连续 32-byte nodes 拼成 3072-byte byte stream，再把它解
 coefficient[c] = bits[12*c .. 12*c+11] as little-endian unsigned integer
 ```
 
-值域为 `[0, 4095]`，严格小于 `plain_modulus = 4099`。decoder 执行完全相反的
-操作。必须提供以下断言：
+值域为 `[0, 4095]`，严格小于运行时生成的 13-bit plaintext modulus。decoder
+执行完全相反的操作。必须提供以下断言：
 
 - `plaintext_payload_bytes % node_bytes == 0`；
 - 所有编码 coefficient `< plain_modulus`；
@@ -182,7 +221,7 @@ roots/tables。默认 `PirParams()` 仍等价于当前 compile-time standard 配
 
 ### Layerwise shape planner
 
-flat 和 standard 固定使用 `target_num_pt = 43,691`、`expansion_height = 10` 的
+flat 和 standard 固定使用 `target_num_pt = 349,526`、`expansion_height = 10` 的
 同一个 reference layout。每个 layerwise database 使用以下确定性 planner：
 
 1. 目标 plaintext 数为 `ceil(2^l / 96)`；
@@ -239,7 +278,7 @@ BV Galois key集合只为 max height 10 生成一次。height `h < 10` 的 serve
 expansion 使用同一集合中前 `h` 个对应 automorphism keys。GSW helper key 与
 database shape 无关，同样只生成一次。
 
-服务端不得为 21 层按值复制整套 keys。增加只读共享 key bundle：
+服务端不得为 `H` 层按值复制整套 keys。增加只读共享 key bundle：
 
 ```cpp
 struct PirSessionKeys {
@@ -278,7 +317,7 @@ database preprocessing 在 benchmark trial 计时之外完成，并分别报告 
 
 ### `standard_onionpir`
 
-- 使用 flat reference layout 的 44,032 padded plaintext shape；
+- 使用 flat reference layout 的 349,696 padded plaintext shape；
 - 数据内容可为确定性 plaintext source；
 - 每个 trial 查询一个 plaintext；
 - 一条 query、一条 response；
@@ -289,20 +328,20 @@ database preprocessing 在 benchmark trial 计时之外完成，并分别报告 
 
 - 一个 server/database 存储所有非 root nodes；
 - database 只 preprocess 一次；
-- 每个 trial 选择一个 leaf，并按 level `H..1` 生成 21 个 sibling 查询；
-- 21 条 query 依次访问相同 server；
-- 返回的 21 个 plaintext 分别按对应 node offset 解出 32-byte node；
-- useful response payload 为 `21 * 32 = 672` bytes；
-- scanned padded bytes 为 `21 * reference_layout_bytes`。
+- 每个 trial 选择一个 leaf，并按 level `H..1` 生成 `H` 个 sibling 查询；
+- `H` 条 query 依次访问相同 server；
+- 返回的 `H` 个 plaintext 分别按对应 node offset 解出 32-byte node；
+- useful response payload 为 `H * 32` bytes；1 GB 主跑为 `24 * 32 = 768` bytes；
+- scanned padded bytes 为 `H * reference_layout_bytes`。
 
 ### `merkle_layerwise`
 
-- 21 个 per-level layout/server/database；
+- `H` 个 per-level layout/server/database；
 - 所有 server 共享同一个 `SharedPirSessionKeys`；
 - 每个 trial 在每一层查询 local sibling plaintext index；
 - upper level 即使只有一个 logical plaintext 也执行退化 encrypted PIR；
-- useful response payload 同样为 672 bytes；
-- scanned padded bytes 为 21 个 per-level rounded layout bytes 之和；
+- useful response payload 同样为 `H * 32` bytes；
+- scanned padded bytes 为 `H` 个 per-level rounded layout bytes 之和；
 - level servers 可以同时驻留，但 benchmark cases 必须顺序构造/销毁，避免
   standard、flat 和 layerwise 大数据库同时占用内存。
 
@@ -333,7 +372,7 @@ partial plaintext，且不需要运行 HE。
    相等；
 4. `merkle_layerwise` 返回同一完整 sibling path；
 5. flat 和 layerwise 对 leaf 0、last 和 deterministic middle leaf 返回相同 path；
-6. communication accumulator 对 21 层只计算一次 helper bundle。
+6. communication accumulator 对 `H` 层只计算一次 helper bundle。
 
 多维 HE smoke 使用 `H = 16`：flat target 超过 1024 plaintexts，确保测试不仅
 覆盖 single first-dimension 路径，还覆盖 QueryUnpack/other-dimension MUX。
@@ -361,8 +400,8 @@ online trial:
   response_load_decrypt_extract_time
 ```
 
-Merkle 两种模式的一个 trial 是完整 21-level path，不是单个 level call。各分项
-在 21 次 PIR 上求和。`server_compute_time` 是主要 latency/throughput 分母，以
+Merkle 两种模式的一个 trial 是完整 `H`-level path，不是单个 level call。各分项
+在 `H` 次 PIR 上求和。`server_compute_time` 是主要 latency/throughput 分母，以
 保持与现有 OnionPIRv2 `SERVER_TOT_TIME` 口径一致。另报：
 
 ```text
@@ -384,6 +423,25 @@ actual_response_bytes       = sum(save_resp_to_stream return values)
 ```
 
 不计算 client secret、本地 RNG state、C++ metadata 或不存在的 public/relin key。
+在 1 GB 主跑、`H = 24`、`k1_comp` 下，通信 sanity check 必须满足：
+
+```text
+modeled_query_bytes_per_pir = 14,880
+actual_response_bytes_per_pir = 11,264
+modeled_helper_key_bytes = 1,488,000
+
+standard_onionpir:
+  online_total_bytes_mixed = 14,880 + 11,264 = 26,144
+  first_session_total_bytes_mixed = 1,514,144
+
+merkle_flat / merkle_layerwise:
+  online_query_bytes_modeled = 24 * 14,880 = 357,120
+  online_response_bytes_actual = 24 * 11,264 = 270,336
+  online_total_bytes_mixed = 627,456
+  first_session_total_bytes_mixed = 2,115,456
+```
+
+这些数字的 KB 展示可四舍五入，但 JSON 中保留 byte 精确值。
 每行结果必须包含：
 
 ```text
@@ -406,7 +464,7 @@ first_session_total_bytes    = modeled_helper_key_bytes
                              + online_total_bytes_mixed
 ```
 
-standard 的 `pir_call_count = 1`；flat 和 layerwise 均为 21。因此 naive flat 与
+standard 的 `pir_call_count = 1`；flat 和 layerwise 均为 `H`。因此 naive flat 与
 layerwise 的通信量应相同；若不同，benchmark 必须失败并解释实际 codec 差异。
 字段名和报告说明必须使用 `modeled`/`actual`/`mixed`，不能把 mixed 数字称为
 完整实测 wire bytes。
@@ -436,8 +494,9 @@ pir_scan_throughput_MBps = logical_padded_scan_bytes / server_compute_seconds / 
 另报应用有效载荷：
 
 ```text
-useful_response_bytes = 3072          for standard
-                      = H * 32 = 672  for both Merkle baselines
+useful_response_bytes = 3072           for standard
+                      = H * 32 = 768   for 1 GB Merkle baselines
+                      = H * 32         for other configured Merkle workloads
 
 useful_response_throughput_Bps = useful_response_bytes / server_compute_seconds
 ```
@@ -452,11 +511,20 @@ storage 混为协议吞吐。
 
 ```text
 config          = k1_comp / CONFIG_N2048_K1_COMP
-leaf_count      = 2^21
-tree_height     = 21
+leaf_count      = 2^24
+tree_height     = 24
 node_bytes      = 32
 warmups         = 3
 measured_trials = 5
+```
+
+可选资源门控运行：
+
+```text
+leaf_count      = 2^27
+tree_height     = 27
+paper_row       = 8 GB
+run_policy      = only when estimated physical_preprocessed_storage_bytes fits available memory budget
 ```
 
 trial leaf index 由固定 seed 的平台无关 SplitMix64 生成，并取模 `leaf_count`；
@@ -495,7 +563,9 @@ schema_version
 environment { commit, branch, build_type, config, architecture,
               hexl_enabled, hexl_version, rosetta, non_native_label }
 workload { leaf_count, tree_height, node_bytes, nodes_per_plaintext,
-           warmups, measured_trials, trial_leaf_indices }
+           paper_row, warmups, measured_trials, trial_leaf_indices,
+           optional_workloads[] { leaf_count, tree_height, paper_row,
+                                  status, skip_reason } }
 cases[] {
   name
   correctness_passed
@@ -567,15 +637,16 @@ BV key switching、matrix multiplication、mod switching 算法不因 baseline �
 1. 当前工作位于新的 `codex/merkle-pir-baselines` 分支；
 2. codec、索引、layout、shape planner tests 全部 hard-pass；
 3. 从当前 HEAD 创建的 x86_64 Benchmark build 中，标准 OnionPIR smoke hard-pass；
-4. flat 和 layerwise 对 edge/middle leaves 返回完整 21-node path，并与 oracle
+4. flat 和 layerwise 对 edge/middle leaves 返回完整 24-node path，并与 oracle
    byte-for-byte 一致；
 5. 同一 secret/helper bundle 成功服务至少三种 runtime shapes；
 6. helper-key communication 对每个 Merkle path 只计算一次；
-7. 3 warmup + 5 measured trials 在同一 x86_64/HEXL/Rosetta build 中完成；
+7. 1 GB 主跑的 3 warmup + 5 measured trials 在同一 x86_64/HEXL/Rosetta build 中完成；
 8. 输出三行 `standard_onionpir`、`merkle_flat`、`merkle_layerwise` 的通信、
    latency、scan throughput 和 useful throughput；
 9. 结构化 artifact 包含完整 workload/build/environment metadata；
 10. 所有最终数字来自通过 correctness gates 的当前 commit；
 11. `git diff --check`、相关单元/集成测试和完整 benchmark command 均成功；
-12. 最终报告明确说明 x86_64/Rosetta 非原生限制、modeled/actual 通信边界和剩余
+12. 8 GB 可选行若未运行，最终报告和 JSON 明确给出资源门控 skip reason；
+13. 最终报告明确说明 x86_64/Rosetta 非原生限制、modeled/actual 通信边界和剩余
     风险。
