@@ -269,7 +269,9 @@ uint64_t rescale(uint64_t a, uint64_t inp_mod, uint64_t out_mod);
 // (1) fst_dim_sz + l*(num_dims-1) = 2^h
 // (2) fst_dim_sz * 2^{num_dims-1} >= target_num_pt
 // Returns {fst_dim_sz, num_dims}.
-std::pair<size_t, size_t> calculate_db_shape(size_t target_num_pt, size_t l, size_t h);
+std::pair<size_t, size_t> calculate_db_shape(
+    size_t target_num_pt, size_t l, size_t h,
+    bool fst_dim_pow2 = DBConsts::FST_DIM_POW2);
 
 // given a number x and a logn, return the bit-reversed number of x
 inline size_t bit_reverse(size_t x, size_t logn) {

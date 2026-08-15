@@ -12,6 +12,7 @@ void PirTest::run_test(const std::string &test_name) {
   else if (test_name == "decrypt_mod_q")     test_decrypt_mod_q();
   else if (test_name == "mod_switch")        test_mod_switch();
   else if (test_name == "db_shape")          test_db_shape();
+  else if (test_name == "runtime_layout")     test_runtime_layout();
   else if (test_name == "bv_ks")             test_bv_keyswitch();
   else if (test_name == "cpu_info")          print_cpu_info();
   else if (test_name == "hexl_ntt")          test_hexl_ntt();

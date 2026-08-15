@@ -4,8 +4,11 @@
 #include "hexl/hexl.hpp"
 
 #include <cassert>
+#include <bit>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
 void PirParams::init_composite_rns() {
@@ -86,16 +89,67 @@ PirParams::PirParams()
   // num_dims_ counts the first dimension plus recursive expansion dimensions.
   // Expansion capacity is constrained by TREE_HEIGHT and L_EP because each
   // expansion level contributes selector capacity through the data gadget rows.
-  size_t target_num_pt = DBConsts::DB_SIZE_MB * 1024 * 1024 / get_pt_size();
-  DEBUG_PRINT("target_num_pt: " << target_num_pt);
-  // Per-dim query slot count is l_ep_ (one BFV per gadget power).
-  auto [fst_dim_sz, num_dims] = utils::calculate_db_shape(
-      target_num_pt, l_ep_, DBConsts::TREE_HEIGHT);
+  const size_t target_num_pt =
+      DBConsts::DB_SIZE_MB * 1024 * 1024 / get_pt_size();
+  apply_layout(
+      {target_num_pt, DBConsts::TREE_HEIGHT, DBConsts::FST_DIM_POW2});
+  DEBUG_PRINT("target_num_pt: " << target_num_pt_);
+  DEBUG_PRINT("fst_dim_sz: " << fst_dim_sz_ << ", num_dims: " << num_dims_);
+}
+
+void PirParams::apply_layout(const PirLayoutConfig &layout) {
+  if (layout.target_num_pt == 0) {
+    throw std::invalid_argument("PirParams: target_num_pt must be positive");
+  }
+
+  constexpr size_t max_expansion_height =
+      std::bit_width(DBConsts::PolyDegree) - 1;
+  if (layout.expansion_height > max_expansion_height ||
+      layout.expansion_height >= std::numeric_limits<size_t>::digits) {
+    throw std::invalid_argument(
+        "PirParams: expansion_height exceeds the ring automorphism capacity");
+  }
+
+  const auto [fst_dim_sz, num_dims] = utils::calculate_db_shape(
+      layout.target_num_pt, l_ep_, layout.expansion_height,
+      layout.fst_dim_pow2);
+  const size_t other_dim_sz =
+      utils::roundup_div(layout.target_num_pt, fst_dim_sz);
+  if (other_dim_sz > std::numeric_limits<size_t>::max() / fst_dim_sz) {
+    throw std::overflow_error("PirParams: rounded database shape overflows");
+  }
+
+  target_num_pt_ = layout.target_num_pt;
+  expansion_height_ = layout.expansion_height;
+  fst_dim_pow2_ = layout.fst_dim_pow2;
   fst_dim_sz_ = fst_dim_sz;
   num_dims_ = num_dims;
-  DEBUG_PRINT("fst_dim_sz: " << fst_dim_sz_ << ", num_dims: " << num_dims_);
-  size_t other_dim_sz = utils::roundup_div(target_num_pt, fst_dim_sz_);
-  num_pt_ = fst_dim_sz_ * other_dim_sz;
+  num_pt_ = fst_dim_sz * other_dim_sz;
+}
+
+PirParams PirParams::with_layout(const PirLayoutConfig &layout) const {
+  PirParams result(*this);
+  result.apply_layout(layout);
+  return result;
+}
+
+bool PirParams::scheme_compatible(const PirParams &other) const {
+  const bool same_composite =
+      composite_rns_.enabled == other.composite_rns_.enabled &&
+      composite_rns_.q1 == other.composite_rns_.q1 &&
+      composite_rns_.q2 == other.composite_rns_.q2 &&
+      composite_rns_.w1 == other.composite_rns_.w1 &&
+      composite_rns_.w2 == other.composite_rns_.w2 &&
+      composite_rns_.w_crt == other.composite_rns_.w_crt &&
+      composite_rns_.q1_inv_mod_q2 == other.composite_rns_.q1_inv_mod_q2;
+  return small_q_ == other.small_q_ && base_log2_ == other.base_log2_ &&
+         base_log2_key_ == other.base_log2_key_ &&
+         plain_mod_ == other.plain_mod_ &&
+         rns_mod_bits_ == other.rns_mod_bits_ &&
+         rns_mods_ == other.rns_mods_ &&
+         rns_tables_.q0_inv_mod_q1 == other.rns_tables_.q0_inv_mod_q1 &&
+         rns_tables_.r64_mod_q == other.rns_tables_.r64_mod_q &&
+         same_composite;
 }
 
 const size_t PirParams::get_ct_mod_width() const {

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -372,14 +373,24 @@ size_t utils::roundup_div(const size_t numerator, const size_t denominator) {
 //   l            : GSW gadget length used for "other"-dim reconstruction (= l_ep).
 //   h            : expansion tree height (= TREE_HEIGHT).
 // Returns: {fst_dim_sz, num_dims}.
-std::pair<size_t, size_t> utils::calculate_db_shape(size_t target_num_pt, size_t l, size_t h) {
+std::pair<size_t, size_t> utils::calculate_db_shape(
+    size_t target_num_pt, size_t l, size_t h, bool fst_dim_pow2) {
+  if (target_num_pt == 0) {
+    throw std::invalid_argument("calculate_db_shape target must be positive");
+  }
+  if (l == 0) {
+    throw std::invalid_argument("calculate_db_shape gadget length must be positive");
+  }
+  if (h >= std::numeric_limits<size_t>::digits) {
+    throw std::invalid_argument("calculate_db_shape height is too large");
+  }
   const size_t capacity = size_t{1} << h;
   const size_t max_num_dims = 1 + (capacity - 1) / l;
   for (size_t num_dims = 1; num_dims <= max_num_dims + 1; num_dims++) {
     const size_t reserved = l * (num_dims - 1);
     if (reserved >= capacity) break;  // guard size_t underflow
     const size_t slack = capacity - reserved;
-    const size_t fst_dim_sz = DBConsts::FST_DIM_POW2
+    const size_t fst_dim_sz = fst_dim_pow2
         ? (size_t{1} << (std::bit_width(slack) - 1))
         : slack;
     if (fst_dim_sz * (size_t{1} << (num_dims - 1)) >= target_num_pt) {

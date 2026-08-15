@@ -30,11 +30,22 @@ struct CompositeRnsTables {
   uint64_t q1_inv_mod_q2 = 0;   // for CRT-compose hot path
 };
 
+// Database-layout inputs that may vary between PIR calls while the underlying
+// BFV/RGSW scheme parameters and helper keys remain unchanged.
+struct PirLayoutConfig {
+  size_t target_num_pt;
+  size_t expansion_height;
+  bool fst_dim_pow2;
+};
+
 // ================== CLASS DEFINITIONS ==================
 class PirParams {
 public:
   PirParams();
   PirParams(const PirParams &pir_params) = default;
+
+  PirParams with_layout(const PirLayoutConfig &layout) const;
+  bool scheme_compatible(const PirParams &other) const;
 
   // ================== getters ==================
   // Getter group exposes derived runtime parameters. Treat get_DBSize_MB() as
@@ -55,6 +66,7 @@ public:
     return static_cast<double>(get_coeff_val_cnt()) * num_pt_ * sizeof(db_coeff_t) / 1024 / 1024;
   }
   inline size_t get_num_pt() const { return num_pt_; }
+  inline size_t get_target_num_pt() const { return target_num_pt_; }
   inline size_t get_num_dims() const { return num_dims_; }
   inline size_t get_l() const { return l_ep_; }
   inline size_t get_l_key() const { return l_key_; }
@@ -74,7 +86,8 @@ public:
   inline const RnsTables &get_rns_tables() const { return rns_tables_; }
   inline const CompositeRnsTables &get_composite_rns() const { return composite_rns_; }
   inline size_t get_poly_degree() const { return DBConsts::PolyDegree; }
-  inline const size_t get_expan_height() const { return DBConsts::TREE_HEIGHT; }
+  inline size_t get_expan_height() const { return expansion_height_; }
+  inline bool get_fst_dim_pow2() const { return fst_dim_pow2_; }
   inline size_t get_num_other_dims() const { return num_dims_ - 1; }
 
   // Standard deviation σ of the Gaussian error distribution used during
@@ -115,6 +128,9 @@ private:
   uint64_t small_q_ = 0;
   size_t base_log2_;
   size_t base_log2_key_;
+  size_t target_num_pt_ = 0;
+  size_t expansion_height_ = DBConsts::TREE_HEIGHT;
+  bool fst_dim_pow2_ = DBConsts::FST_DIM_POW2;
   size_t num_pt_;
   size_t fst_dim_sz_;
   size_t num_dims_;
@@ -129,4 +145,5 @@ private:
   // 以使用 29-bit 的 32x32->64 kernel。w_crt 是在 composite q 下可用的
   // 2N-th root，必须注册给 NTT wrapper；它不是普通 prime-modulus root。
   void init_composite_rns();
+  void apply_layout(const PirLayoutConfig &layout);
 };
