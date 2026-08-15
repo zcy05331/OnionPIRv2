@@ -3,6 +3,7 @@
 #include "pir.h"
 #include "gsw.h"
 #include "bv_keyswitch.h"
+#include "pir_session.h"
 #include "rlwe.h"
 #include <random>
 
@@ -21,11 +22,15 @@ public:
   @param pt_idx The input to the PIR blackbox.
   */
   RlweCt fast_generate_query(const size_t pt_idx);
+  RlweCt fast_generate_query(const PirParams &query_params, size_t pt_idx);
 
   // [2025 Algorithm 1: QueryPack]
   // fast_generate_query 的 helper：只把高维 binary selector bits 作为
   // RGSW top rows 打包进已经创建好的 BFV query。
-  void add_gsw_to_query(RlweCt &query, const std::vector<size_t> query_indices);
+  void add_gsw_to_query(RlweCt &query,
+                        const std::vector<size_t> &query_indices);
+  void add_gsw_to_query(const PirParams &query_params, RlweCt &query,
+                        const std::vector<size_t> &query_indices);
 
   // Create custom BV-style Galois keys (no special prime).
   inline bvks::BvGaloisKeys create_bv_galois_keys() {
@@ -36,6 +41,7 @@ public:
   // Produce the per-client GSW key (encryption of s under the data modulus) in
   // its final flat NTT layout, ready to hand to PirServer::set_client_gsw_key.
   GSWCt generate_gsw_from_key();
+  SharedPirSessionKeys create_session_keys();
 
   inline size_t get_client_id() const { return client_id_; }
 
@@ -74,14 +80,14 @@ private:
   // Algorithm 4 line 1 的 plaintext index 坐标映射：
   // return[0] 是首维 col_idx；其余 entries 是服务端归约顺序消费的
   // selector bits，第一个 bit 对应 deepest/ragged level。
-  std::vector<size_t> get_query_indices(size_t pt_idx);
+  std::vector<size_t> get_query_indices(const PirParams &query_params,
+                                        size_t pt_idx) const;
 
   // Populate sk_ntt_small_q_ by rewriting rlwe_sk_ from old_q to small_q
   // (ternary sk has -1 ≡ q-1; we need -1 ≡ small_q-1).
   std::vector<uint64_t> get_sk_ntt_small_q(uint64_t old_q, uint64_t small_q) const;
 
 };
-
 
 
 

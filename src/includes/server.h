@@ -3,6 +3,7 @@
 #include "gsw.h"
 #include "pir.h"
 #include "bv_keyswitch.h"
+#include "pir_session.h"
 #include "aligned_allocator.h"
 #include <functional>
 #include <map>
@@ -40,6 +41,8 @@ public:
   size_t save_resp_to_stream(const RlweCt &response, std::stringstream &resp_stream);
   void set_client_bv_galois_key(const size_t client_id, bvks::BvGaloisKeys bv_keys);
   void set_client_gsw_key(const size_t client_id, GSWCt gsw_key);
+  void set_client_session_keys(size_t client_id, SharedPirSessionKeys keys);
+  SharedPirSessionKeys client_session_keys(size_t client_id) const;
 
   /**
   Asking the server to return the original plaintext (before NTT transformation) at the given index.
@@ -78,6 +81,7 @@ private:
   size_t num_pt_;
   std::map<size_t, bvks::BvGaloisKeys> client_bv_galois_keys_;
   std::map<size_t, GSWCt> client_gsw_keys_;
+  std::map<size_t, SharedPirSessionKeys> client_sessions_;
   std::unordered_map<size_t, RlwePt> recorded_pts_; // pre-NTT plaintexts for test verification
   std::unique_ptr<db_coeff_t[], AlignedDeleter<db_coeff_t>> db_aligned_; // aligned database for fast first dim
   std::vector<inter_coeff_t> inter_res_; // intermediate result vector for fst dim

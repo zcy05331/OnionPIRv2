@@ -5,7 +5,9 @@
 #include "rlwe.h"
 #include "hexl/hexl.hpp"
 #include <cassert>
+#include <memory>
 #include <random>
+#include <stdexcept>
 
 
 // Build the K-limb sk lazily because its construction depends on PirParams.
@@ -35,17 +37,25 @@ GSWCt PirClient::generate_gsw_from_key() {
   return key_gsw.plain_to_gsw(sk_coef, rlwe_sk_, rng_);
 }
 
+SharedPirSessionKeys PirClient::create_session_keys() {
+  auto keys = std::make_shared<PirSessionKeys>();
+  keys->bv_galois_keys = create_bv_galois_keys();
+  keys->gsw_key = generate_gsw_from_key();
+  return keys;
+}
 
-std::vector<size_t> PirClient::get_query_indices(size_t pt_idx) {
+
+std::vector<size_t> PirClient::get_query_indices(
+    const PirParams &query_params, size_t pt_idx) const {
   // Algorithm 4 line 1 把扁平 plaintext index 映射到 QueryPack 坐标。
   // col_idx 是首维 BFV one-hot 坐标；row_idx 覆盖其余维度。论文规则是
   // binary hypercube，这里实现为 complete-but-not-perfect/ragged tree。
   // 返回向量为 {col_idx, selector bits...}；selector bits 按服务端归约
   // 顺序输出，第一个 selector 处理 deepest folded leaves。
-  const size_t col_idx = pt_idx % pir_params_.get_fst_dim_sz();  // the first dimension
-  const size_t row_idx = pt_idx / pir_params_.get_fst_dim_sz();  // the rest of the dimensions
-  const size_t other_dim_sz = pir_params_.get_other_dim_sz();
-  const size_t d = pir_params_.get_num_dims();
+  const size_t col_idx = pt_idx % query_params.get_fst_dim_sz();  // the first dimension
+  const size_t row_idx = pt_idx / query_params.get_fst_dim_sz();  // the rest of the dimensions
+  const size_t other_dim_sz = query_params.get_other_dim_sz();
+  const size_t d = query_params.get_num_dims();
   const size_t h = d - 1; // the height of the further dimension complete binary tree.
   
   std::vector<size_t> query_indices = {col_idx};
@@ -91,16 +101,30 @@ std::vector<size_t> PirClient::get_query_indices(size_t pt_idx) {
 
 
 RlweCt PirClient::fast_generate_query(const size_t pt_idx) {
-  constexpr size_t N = DBConsts::PolyDegree;
-  constexpr size_t K = DBConsts::RnsMods.size();
-  const auto &qs_arr = pir_params_.get_rns_mods();
-  const std::vector<uint64_t> qs(qs_arr.begin(), qs_arr.end());
-  const uint64_t t = pir_params_.get_plain_mod();
-  const double sigma = pir_params_.get_noise_std_dev();
+  return fast_generate_query(pir_params_, pt_idx);
+}
 
-  std::vector<size_t> query_indices = get_query_indices(pt_idx);
+RlweCt PirClient::fast_generate_query(const PirParams &query_params,
+                                      const size_t pt_idx) {
+  if (!pir_params_.scheme_compatible(query_params)) {
+    throw std::invalid_argument(
+        "PirClient query layout is not scheme-compatible with its session");
+  }
+  if (pt_idx >= query_params.get_num_pt()) {
+    throw std::out_of_range("PIR plaintext index exceeds the runtime layout");
+  }
+
+  constexpr size_t N = DBConsts::PolyDegree;
+  const size_t K = query_params.K();
+  const auto &qs_arr = query_params.get_rns_mods();
+  const std::vector<uint64_t> qs(qs_arr.begin(), qs_arr.end());
+  const uint64_t t = query_params.get_plain_mod();
+  const double sigma = query_params.get_noise_std_dev();
+
+  std::vector<size_t> query_indices =
+      get_query_indices(query_params, pt_idx);
   PRINT_INT_ARRAY("\t\tquery_indices", query_indices.data(), query_indices.size());
-  const size_t expan_height = pir_params_.get_expan_height();
+  const size_t expan_height = query_params.get_expan_height();
   const size_t capacity = size_t{1} << expan_height;  // 2^h slots after expansion
 
   uint64_t inverse = 0;
@@ -119,7 +143,7 @@ RlweCt PirClient::fast_generate_query(const size_t pt_idx) {
   encrypt_zero_rns(rlwe_sk_, N, qs, sigma, rng_, query, /*ntt_form=*/false);
 
   // Adding 1^{-1} as a message to the query so that after expansion, the query will have 1's in the correct positions.
-  if constexpr (K == 1) {
+  if (K == 1) {
     const uint64_t Q = qs[0];
     const uint64_t scaled = utils::round_div_u128((uint128_t)Q * inverse, t) % Q;
     query.c0[reversed_index] = (query.c0[reversed_index] + scaled) % Q;
@@ -137,20 +161,31 @@ RlweCt PirClient::fast_generate_query(const size_t pt_idx) {
     }
   }
 
-  add_gsw_to_query(query, query_indices);
+  add_gsw_to_query(query_params, query, query_indices);
   return query;
 }
 
 
-void PirClient::add_gsw_to_query(RlweCt &query, const std::vector<size_t> query_indices) {
+void PirClient::add_gsw_to_query(
+    RlweCt &query, const std::vector<size_t> &query_indices) {
+  add_gsw_to_query(pir_params_, query, query_indices);
+}
+
+void PirClient::add_gsw_to_query(
+    const PirParams &query_params, RlweCt &query,
+    const std::vector<size_t> &query_indices) {
+  if (!pir_params_.scheme_compatible(query_params)) {
+    throw std::invalid_argument(
+        "PirClient query layout is not scheme-compatible with its session");
+  }
   // no further dimensions
   if (query_indices.size() == 1) { return; }
-  const size_t expan_height = pir_params_.get_expan_height();
+  const size_t expan_height = query_params.get_expan_height();
   const size_t capacity = size_t{1} << expan_height;  // 2^h slots after expansion
-  const size_t l = pir_params_.get_l();
-  const auto rns_mods = pir_params_.get_rns_mods();
-  const size_t K = pir_params_.K();
-  const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();
+  const size_t l = query_params.get_l();
+  const auto rns_mods = query_params.get_rns_mods();
+  const size_t K = query_params.K();
+  const size_t fst_dim_sz = query_params.get_fst_dim_sz();
 
   // 1/capacity per limb, cancels the scaling factor introduced by expansion.
   std::vector<uint64_t> inv(K);
@@ -163,7 +198,7 @@ void PirClient::add_gsw_to_query(RlweCt &query, const std::vector<size_t> query_
   // MP gadget table: gadget[k][p] = B^(l-1-p) mod q_k. MSB-first
   // (p=0 = largest power), matching plain_to_gsw.
   std::vector<std::vector<uint64_t>> gadget =
-      utils::gsw_gadget(l, pir_params_.get_base_log2(), rns_mods);
+      utils::gsw_gadget(l, query_params.get_base_log2(), rns_mods);
 
   // QueryPack packed slots layout:
   // [0, N0) 是首维 BFV one-hot。代码索引 i=1..query_indices.size()-1 时，

@@ -727,7 +727,11 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
                                 (pir_params_.get_num_dims() - 1); // u
   const size_t expan_height = pir_params_.get_expan_height(); // h
   const size_t capacity = size_t{1} << expan_height;          // 2^h
-  const auto &bv_galois_key = client_bv_galois_keys_.at(client_id);
+  const auto session_it = client_sessions_.find(client_id);
+  const bvks::BvGaloisKeys &bv_galois_key =
+      session_it != client_sessions_.end()
+          ? session_it->second->bv_galois_keys
+          : client_bv_galois_keys_.at(client_id);
   constexpr size_t N = DBConsts::PolyDegree;
   const auto &qs = pir_params_.get_rns_mods();
   const size_t K = qs.size();
@@ -810,6 +814,22 @@ void PirServer::set_client_gsw_key(const size_t client_id, GSWCt gsw_key) {
   client_gsw_keys_[client_id] = std::move(gsw_key);
 }
 
+void PirServer::set_client_session_keys(size_t client_id,
+                                        SharedPirSessionKeys keys) {
+  if (!keys) {
+    throw std::invalid_argument("PirServer session key bundle cannot be null");
+  }
+  if (keys->bv_galois_keys.keys.size() < pir_params_.get_expan_height()) {
+    throw std::invalid_argument(
+        "PirServer session lacks keys for its expansion height");
+  }
+  client_sessions_[client_id] = std::move(keys);
+}
+
+SharedPirSessionKeys PirServer::client_session_keys(size_t client_id) const {
+  return client_sessions_.at(client_id);
+}
+
 
 // 仅 test oracle：这里通过 direct DB lookup 返回记录的 pre-NTT plaintext，
 // 因此会向 server 暴露 requested index。它只用于测试中对比 decrypt_mod_q
@@ -849,6 +869,11 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   const size_t l_ep = pir_params_.get_l();
   std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSWCt containers；prose 语义是 RGSW selectors
   if (pir_params_.get_num_dims() != 1) {  // if we do need futher dimensions
+    const auto session_it = client_sessions_.find(client_id);
+    const GSWCt &completion_key =
+        session_it != client_sessions_.end()
+            ? session_it->second->gsw_key
+            : client_gsw_keys_.at(client_id);
     for (size_t i = 1; i < pir_params_.get_num_dims(); i++) {
       // Copy the selector's top L_EP rows out of the expanded vector. The
       // completion key stored in client_gsw_keys_ is RGSW(s) and was generated
@@ -861,7 +886,7 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
         lwe_vector.push_back(query_vector[ptr]);
       }
       // 用 expanded BFV top rows completion 成完整 RGSW selector ciphertext。
-      key_gsw_.query_to_gsw(lwe_vector, client_gsw_keys_[client_id], gsw_vec[i - 1]);
+      key_gsw_.query_to_gsw(lwe_vector, completion_key, gsw_vec[i - 1]);
     }
   }
   TIME_END(CONVERT_TIME);
@@ -1026,7 +1051,6 @@ void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
     ciphertext.c1.resize(coeff_count);
   }
 }
-
 
 
 
