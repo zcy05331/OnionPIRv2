@@ -86,12 +86,20 @@ void decompose_mp_to_rns(uint64_t *buf, size_t N,
 
 } // namespace
 
-// Here we compute a cross product between the transpose of the decomposed BFV
-// (a 2l vector of polynomials) and the GSW ciphertext (a 2lx2 matrix of
-// polynomials) to obtain a size-2 vector of polynomials, which is exactly our
-// result ciphertext. We use an NTT multiplication to speed up polynomial
-// multiplication, assuming that both the GSWCt and decomposed bfv is in
-// polynomial coefficient representation.
+// external_product 的数据形状是 Algorithm 3/QueryUnpack 后续 selector
+// evaluation 的核心不变量：把输入 BFV/RLWE ciphertext 的两个 components
+// c0、c1 各自 gadget-decompose 成 l rows，拼成 [1 x 2*l] polynomial vector；
+// 再与 RGSW ciphertext 的 flat [2*l x 2] matrix 做 polynomial matmul，得到
+// 输出 BFV/RLWE 的两个 components。每个 GSWCt row 都是 [c0][c1]，其中 c0/c1
+// 各有 K*N limb-major values。
+//
+// 乘法分三阶段：
+//   1. 在 coefficient form 分解输入 BFV 的 c0/c1。
+//   2. 将每个 digit row 转到 NTT domain。
+//   3. 与已经 NTT-form 的 RGSW matrix 做 pointwise polynomial matmul。
+// 因此 res_ct 输出保持 NTT form；是否 INTT 由 caller 决定。GSWEval 内部的
+// ep_decomp_/ep_tmp_/ep_dwork_ scratch 跨调用复用，当前对象只适合本仓库
+// 单线程 evaluation path。
 
 
 void GSWEval::gsw_ntt_forward(GSWCt &gsw) {
@@ -119,9 +127,14 @@ void GSWEval::external_product(GSWCt const &gsw_enc, RlweCt const &bfv,
   const size_t coeff_val_cnt = DBConsts::PolyDegree * K; // polydegree * RNS moduli count
 
   // ============================ Decomposition ============================
-  // MP gadget: 2 * l_ rows in either K=1 or K=2. Reuse the per-instance scratch
-  // (sized once) so the thousands of external products don't each heap-allocate
-  // the decomposition rows.
+  // Decompose the BFV input into the [c0 digits][c1 digits] vector consumed by
+  // the RGSW matrix. K=1 的 data external product 直接使用 centered signed
+  // digits；K=2 的 data external product 走 CRT-compose -> unsigned base-B
+  // digit extraction -> decompose-back-to-RNS。后者不同于 BV K=2 signed
+  // decomposition path，也不是论文 signed optimization 的完整实现。
+  //
+  // Reuse the per-instance scratch (sized once) so the thousands of external
+  // products don't each heap-allocate the decomposition rows.
   const size_t gsw_rows = 2 * l_;
   if (ep_decomp_.size() != gsw_rows) ep_decomp_.assign(gsw_rows, std::vector<uint64_t>(coeff_val_cnt));
   else for (auto &row : ep_decomp_) if (row.size() != coeff_val_cnt) row.assign(coeff_val_cnt, 0);
@@ -134,11 +147,11 @@ void GSWEval::external_product(GSWCt const &gsw_enc, RlweCt const &bfv,
   }
   TIME_END(log_keys.decomp);
 
-  // Transform decomposed coefficients to NTT form
+  // Stage 2: transform decomposed coefficient rows to NTT form.
   decomp_to_ntt(decomposed_bfv, context);
 
   // ============================ Polynomial Matrix Multiplication ============================
-  // result = decomp(bfv) [1 x 2l] * gsw [2l x 2], accumulated per output poly and
+  // Stage 3: result = decomp(bfv) [1 x 2l] * gsw [2l x 2], accumulated per output poly and
   // per RNS limb using HEXL's vectorized modular mult/add (AVX-512), matching the
   // BV-keyswitch inner-product path. Writes straight into res_ct -- no 128-bit
   // intermediate, no scalar % reduction. res_ct may alias bfv: safe because the
@@ -191,14 +204,16 @@ void GSWEval::decomp_rlwe_mp(RlweCt const &ct, std::vector<std::vector<uint64_t>
     memcpy(ct_coeffs.data(), ct.data(poly_id), coeff_val_cnt * sizeof(uint64_t));
     TIME_START(log_keys.compose);
     // Transform the coefficients from RNS form to multi-precision integer form
-    // (little-endian limbs, K limbs per coefficient).
+    // (little-endian limbs, K limbs per coefficient). This K>=2 GSW path extracts
+    // unsigned base-B digits after CRT composition; compare bv_keyswitch.cpp for
+    // the separate BV signed decomposition path.
     // ! compose / decompose are slow when K > 1 because of the per-coeff CRT work.
     compose_rns_to_mp(ct_coeffs.data(), coeff_count, rns_mods, K,
                       pir_params_.get_rns_tables());
     TIME_END(log_keys.compose);
 
-    // we right shift certain amount to match the GSW ciphertext. Rows are
-    // MSB-first: p = l_-1 (largest shift) lands in this poly's row 0.
+    // Extract unsigned base-B digits by right shift/mask. Rows are MSB-first:
+    // p = l_-1 (largest shift) lands in this poly's row 0.
     for (size_t p = l_; p-- > 0;) { // loop from l_ - 1 to 0.
       std::vector<uint64_t> &res = output[poly_id * l_ + (l_ - 1 - p)];
       memcpy(res.data(), ct_coeffs.data(), coeff_val_cnt * sizeof(uint64_t));
@@ -306,7 +321,12 @@ void GSWEval::query_to_gsw(std::vector<RlweCt> query, GSWCt gsw_key,
   constexpr size_t coeff_count = DBConsts::PolyDegree;
   const size_t K = pir_params_.K();
 
-  // We get the first half directly from the query
+  // Algorithm 3 / QueryUnpack: client-side QueryPack placed L_EP BFV
+  // ciphertexts per non-first dimension into the expanded query stream. After
+  // server expansion, the first N0 ciphertexts remain the first-dimension BFV
+  // vector; every following L_EP block is one selector's top half. `query`
+  // here is exactly that selector block. Copy those L_EP BFV rows as the top
+  // half of an RGSW selector, preserving [c0 K*N][c1 K*N] flat row layout.
   for (size_t i = 0; i < curr_l; i++) {
     for (size_t j = 0; j < coeff_count * K; j++) {
       output[i].push_back(query[i].data(0)[j]);
@@ -315,11 +335,14 @@ void GSWEval::query_to_gsw(std::vector<RlweCt> query, GSWCt gsw_key,
       output[i].push_back(query[i].data(1)[j]);
     }
   }
-  gsw_ntt_forward(output);  // And the first half should be in NTT form
+  gsw_ntt_forward(output);  // Top rows must be NTT-form before external products.
   
-  // The second half is computed using external product.
+  // Complete the selector using the uploaded RGSW(s) completion key. key_gsw_
+  // was constructed with L_KEY/base_log2_key, so the decomposition used inside
+  // these external products is the key-decomposition one. The final selector
+  // shape, however, is determined by the L_EP rows supplied above: 2*L_EP rows.
   output.resize(2 * curr_l);
-  // We use external product to get the second half
+  // Each top row external-multiplied by RGSW(s) gives the matching bottom row.
   for (size_t i = 0; i < curr_l; i++) {
     TIME_START(CONVERT_EXTERN);
     external_product(gsw_key, query[i], query[i], LogContext::QUERY_TO_GSW);

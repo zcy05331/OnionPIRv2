@@ -12,19 +12,29 @@
 // ============================================================================
 //
 // This module implements Brakerski-Vaikuntanathan (BV) key-switching for
-// Galois automorphisms, replacing SEAL's GHS-based key-switching in the
-// query expansion step.
+// Algorithm 2 Subs / ExpandBFV automorphism，用在 query expansion 中替代
+// SEAL 的 GHS-style key switching。
 //
-// Unlike GHS, BV does not use a special prime. Each key-switching key is a
-// set of L_KS RLWE ciphertexts encrypting σ_k(s) · B^i (for i = 0..L_KS-1)
-// under the ciphertext modulus q (product of rns_mods).
+// 与 GHS 不同，BV 不引入 special prime。每个 key-switching key 是 L_KS 个
+// RLWE ciphertext rows，在 ciphertext modulus q（或 rns_mods 的 full-q 乘积）
+// 下加密 σ_k(s) · B^i，i = 0..L_KS-1。
+//
+// Algorithm 2 的 Subs 先把 ring automorphism 同时作用到两个 ciphertext
+// polynomial：
+//   (c0, c1) -> (σ_k(c0), σ_k(c1)).
+// 这一步之后 ciphertext 自然对应 secret σ_k(s)，不是原来的 s。BV key
+// switching 把 transformed c1 做 signed base-B decomposition，把这些 signed
+// digits 乘入加密 σ_k(s) * B^i 的 rows 并累加，从而把输出切回原 secret s。
 //
 // Key-switch operation:
 //   σ_k(ct) = (σ_k(c0) + Σ d_i · ksk.b[i],  Σ d_i · ksk.a[i])
 // where d_i = gadget_decompose(σ_k(c1))[i] and all products are in NTT form.
 //
-// For the currently active single-limb configuration, K == 1 and
-// gadget decomposition is a straightforward bit-shift on uint64 coefficients.
+// BvRlweCt 对每个 KSK row 使用 SEAL/BV-style (a,b) 命名；主路径 RlweCt
+// 使用 (c0,c1)，因此对应关系是 BvRlweCt.b -> RlweCt.c0，BvRlweCt.a ->
+// RlweCt.c1。row 本身是 NTT-form、limb-major layout：limb 0 的 N 个系数
+// 在前，接着 limb 1，依此类推。digits buffer 是 row-major digit blocks，
+// 每个 block 先转到对应 limb 的 NTT domain，再做 pointwise MAC。
 
 namespace bvks {
 
@@ -33,7 +43,8 @@ namespace bvks {
 constexpr size_t L_KS = DBConsts::L_KS;
 
 // A single RLWE ciphertext under the data modulus, stored in NTT form.
-// Layout: K * N uint64s per polynomial component.
+// Layout: K * N uint64s per polynomial component, limb-major.
+// `a` 对应 main-path c1；`b` 对应 main-path c0。
 struct BvRlweCt {
   std::vector<uint64_t> a; // size = K * N
   std::vector<uint64_t> b; // size = K * N

@@ -48,10 +48,16 @@ PirServer::~PirServer() {
 }
 
 // Fills the database with random data.
+// Offline DB preprocessing 对应 2025 Algorithm 4 的 A 矩阵准备：每个 plaintext
+// polynomial 先变成 NTT form，然后从 plaintext-major [pt][coeff] 转成
+// coefficient-major [limb/NTT coefficient][pt]。这样在固定 (limb, NTT
+// coefficient) 下，所有 DB entries 按 first dimension 连续存放，首维 kernel
+// 做 linear scan 时 A[row][k] 是顺序访问。
 // Streams plaintexts in tiles: for each tile we generate random coefficients,
 // record any tagged for verification, NTT under each q_k, and transpose-scatter
-// into db_aligned_ — then drop the tile buffer. This keeps peak RAM at
-// ~|db_aligned_| (one copy) rather than 2x (full pre-NTT plaintext array).
+// into coefficient-major DB buffers — standard path writes db_aligned_, while
+// composite path writes db_lo_/db_hi_. Then drop the tile buffer. tile staging
+// 只保留少量 pre-NTT plaintexts，避免同时持有整份 pre-NTT DB 和重排后的 DB。
 // record_indices: indices of plaintexts to save (pre-NTT) for test verification.
 void PirServer::gen_data(const std::vector<size_t>& record_indices) {
   BENCH_PRINT("Generating random data for the server database...");
@@ -122,7 +128,10 @@ void PirServer::gen_data(const std::vector<size_t>& record_indices) {
 
     // Standard path: NTT each plaintext under each q_k into stage, then
     // tile-transpose-write into db_aligned_. Layout matches the matmul:
-    // db_aligned_[coeff_idx * num_pt_ + poly_id], coeff_idx in [0, K*N).
+    // db_aligned_[level * num_pt_ + poly_id], level = k*N + coeff_idx.
+    // evaluate_first_dim later views one level slice as A[Nrest x N0], where
+    // consecutive poly_id values are the N0 scan dimension for a fixed candidate
+    // row and fixed NTT coefficient.
     for (size_t k = 0; k < K; ++k) {
       const uint64_t qk = rns_mods[k];
       uint64_t *limb_base = stage.data() + k * TILE * coeff_count;
@@ -157,7 +166,13 @@ void PirServer::prep_query(std::vector<RlweCt> &fst_dim_query,
   const size_t K = rns_mods.size();
   constexpr size_t N = DBConsts::PolyDegree;
  
-  // transform the selection vector to ntt form
+  // prep_query 把 ciphertext-major query 转成 first-dim kernel layout。输入是
+  // fst_dim_query[i].c0/c1，每个 i 是 selection vector 的一个 BFV ciphertext；
+  // 先对每个 RNS limb 做 NTT，然后按 level-major 写成
+  //   query_data[level][i][0/1] = B[i][c0/c1].
+  // 因而每个 NTT level 的标准矩阵乘法都是
+  //   A[Nrest x N0] * B[N0 x 2] -> C[Nrest x 2].
+  // 若 K>1，level = limb*N + coeff；这是 per-limb/per-level 视图。
   for (size_t i = 0; i < fst_dim_query.size(); i++) {
     RlweCt &ct = fst_dim_query[i];
     for (size_t mod_id = 0; mod_id < K; mod_id++) {
@@ -210,6 +225,10 @@ void PirServer::prep_query_composite(const std::vector<RlweCt> &fst_dim_query,
   const uint64_t q1 = crt.q1;
   const uint64_t q2 = crt.q2;
 
+  // Composite query 已在 evaluate_first_dim 中按 logical q=q1*q2 进入 NTT。
+  // 这里只做首维 kernel 需要的投影：同一 B[N0 x 2] 分别取 mod q1/q2，写入
+  // 两组 uint32 level-major buffers。后续两个 32x32->64 kernels 的输出会在
+  // inter_to_cts_composite 里 CRT-compose 回 logical mod q。
   std::vector<const uint64_t *> data0_ptrs(fst_dim_sz);
   std::vector<const uint64_t *> data1_ptrs(fst_dim_sz);
   for (size_t i = 0; i < fst_dim_sz; ++i) {
@@ -239,9 +258,13 @@ void PirServer::prep_query_composite(const std::vector<RlweCt> &fst_dim_query,
   }
 }
 
-// Computes a dot product between the fst_dim_query and the database for the
-// first dimension with a delayed modulus optimization. fst_dim_query should
-// be transformed to ntt.
+// Computes Algorithm 4 first dimension as batched standard matrix
+// multiplication over NTT levels. For each limb/coefficient level:
+//   A = DB values with shape [other_dim_sz x fst_dim_sz],
+//   B = BFV selection vector columns [fst_dim_sz x 2] (c0/c1),
+//   C = encrypted candidates [other_dim_sz x 2].
+// delayed modulus optimization lives inside the matmul kernels: they accumulate
+// only as far as the accumulator width allows, then reduce mod q.
 std::vector<RlweCt>
 PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();  // number of plaintexts in the first dimension
@@ -254,9 +277,12 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
 
   const auto &crt = pir_params_.get_composite_rns();
   if (crt.enabled) {
-    // Composite path: NTT each fst_dim_query under q = q1*q2 (single mod),
-    // split DB & query into (mod q1, mod q2) u32 limbs, run two parallel
-    // 32x32->64 matmuls, CRT-compose results back to mod q, then INTT mod q.
+    // Composite path: logical ciphertext modulus q=q1*q2 has pipeline K()==1, so
+    // queries are NTTed once under q. Only the first-dim kernel splits DB/query
+    // NTT values into two uint32 projections (mod q1 and mod q2), then runs
+    // the same 32x32->64 kernel under q1 and q2 to compute residue outputs.
+    // inter_to_cts_composite CRT-composes those residues back to logical mod q
+    // before INTT. Later PIR stages still see K=1 ciphertexts.
     const uint64_t q = rns_mods[0];
     for (size_t i = 0; i < fst_dim_query.size(); ++i) {
       RlweCt &ct = fst_dim_query[i];
@@ -299,9 +325,15 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   TIME_END(FST_DIM_PREP);
 
   /*
-  Imagine DB as a (other_dim_sz * fst_dim_sz) matrix, where each element is a
-  vector of size coeff_val_cnt. In OnionPIRv1, the first dimension is doing the
-  component wise matrix multiplication. Further details can be found in the "matrix.h" file.
+  Standard path for 2025 Algorithm 4: instead of treating each DB matrix entry
+  as a vector and doing component-wise vector products, we peel off the vector
+  dimension. For every NTT level independently:
+      db_mat[level]    = A[other_dim_sz x fst_dim_sz]
+      query_mat[level] = B[fst_dim_sz x 2]  (BFV c0/c1 selection vector)
+      inter_res[level] = C[other_dim_sz x 2]
+  This is why the first PIR dimension is exactly a standard matrix
+  multiplication kernel; coefficient-major DB preprocessing makes the inner
+  fst_dim_sz scan contiguous.
   */
   // prepare the matrices
   db_matrix_t db_mat { db_aligned_.get(), other_dim_sz, fst_dim_sz, coeff_val_cnt };
@@ -336,6 +368,13 @@ void PirServer::inter_to_cts(std::vector<RlweCt> &result, const inter_coeff_t *_
   const size_t coeff_val_cnt = coeff_count * K;
   const size_t inter_padding = other_dim_sz * 2;  // distance between coefficients in inter_res
 
+  // inter_res 的实际 stride 是 C[level][candidate][poly]，也就是
+  // level-major 后接 candidate，再接 c0/c1 两列：
+  //   inter_res[level * other_dim_sz * 2 + candidate * 2 + poly].
+  // inter_to_cts 做的是 transpose/gather，把它变成
+  //   RlweCt[candidate].c{0,1}[level].
+  // gather 后每个 ciphertext 仍在 NTT form，随后逐 limb INTT 回 coefficient form。
+  //
   // We need to unroll the loop to process multiple ciphertexts at once.
   // Otherwise, this function is basically reading the intermediate result
   // with a stride of inter_padding, which causes many cache misses.
@@ -454,6 +493,11 @@ void PirServer::inter_to_cts_composite(std::vector<RlweCt> &result,
   constexpr size_t coeff_count = DBConsts::PolyDegree;
   const size_t inter_padding = other_dim_sz * 2;
 
+  // Composite inter_res_lo/hi 使用同样的 C[level][candidate][poly] stride；
+  // logical K=1，所以 level 就是 NTT coefficient。这里先把 lo/hi 两个 limb 做
+  // CRT-compose 得到 mod q 的 RlweCt[candidate].c{0,1}[coeff_id]，再 INTT
+  // 回 coefficient form。split 和 compose 都只包围首维 matmul。
+  //
   // Garner CRT compose: (lo, hi) → lo + q1 * ((hi − lo) · q1_inv mod q2).
   // Since q1, q2 < 2^29, diff·q1_inv stays under 2^58 — no 128-bit mul.
   auto compose = [q1, q2, q1_inv_mod_q2](uint64_t lo, uint64_t hi) -> uint64_t {
@@ -508,18 +552,24 @@ void PirServer::inter_to_cts_composite(std::vector<RlweCt> &result,
 }
 
 RlweCt PirServer::evaluate_other_dim(std::vector<RlweCt> &mid_db, std::vector<GSWCt> &selectors) {
-  // Handle single dimension case
+  // 对应 Algorithm 4 lines 7-14。mid_db 起始保存 first dimension 之后的
+  // Nrest encrypted candidates，其 layout 是 leaf order。selectors[0] 在 deepest
+  // remaining tree level 被消费；后续 selector 逐层向 root 归约，每层通过 MUX
+  // 前/后半 candidates 把 active candidate count 减半。
   if (pir_params_.get_num_dims() == 1) {
-    // For single dimension, we just return the first (and only) ciphertext
+    // 没有 high-dimensional selectors；Algorithm 4 在 lines 4-6 后结束。
     return mid_db[0];
   }
   
   size_t h = pir_params_.get_num_dims() - 1;
   const size_t other_dim_sz = pir_params_.get_other_dim_sz();
-  // For multiple dimensions, calculate the results vector size properly
+  // `other_dim_sz` 不一定是 perfect power of two。virtual selector tree 高度是 h；
+  // `perfect_size` 是 ragged leaves 上方第一个 complete level 的大小。
   const size_t perfect_size = (1 << (h - 1)); // second to last level size
   
-  // handling the last level
+  // 在 deepest/ragged level，`last_level_sz` 是 virtual tree 中真实拥有 sibling 的
+  // leaves 数量；`offset` 之前的 leaves 在这一层没有 sibling，会原位保留。
+  // 这里的 pairing 从 corrected_idx 开始，并把 parent 写回同一 logical level range。
   const size_t last_level_sz = 2 * other_dim_sz - (1 << h);
   const size_t offset = other_dim_sz - last_level_sz;
   
@@ -534,6 +584,8 @@ RlweCt PirServer::evaluate_other_dim(std::vector<RlweCt> &mid_db, std::vector<GS
     const size_t level_sz = (1 << (h - a));
     const size_t half = level_sz >> 1;
     for (size_t i = 0; i < half; i++) {
+      // 这里的 perfect levels 是 dense 的：candidate i 与 i+half 配对，对应
+      // Algorithm 4 中 selector bit b 的规则：b=0 取前半，b=1 取后半。
       auto &x = mid_db[i];
       auto &y = mid_db[i + half];
       ext_prod_mux(x, y, selectors[a], mid_db[i]);
@@ -583,22 +635,29 @@ void PirServer::ext_prod_mux(RlweCt &x, RlweCt &y, GSWCt &selection_cipher, Rlwe
       ct.ntt_form = false;
     };
 
-    // ========== y = y - x ==========
+    // 这里使用 MUX identity：select(b, x_orig, y_orig) = x_orig + b*(y_orig-x_orig)。
+    // 本函数会有意改写参数 `y`：这一步之后它不再是 y_orig，而是每个 full-q
+    // RNS limb 下 coefficient-form 的差值 y_orig-x_orig。
     TIME_START(OTHER_DIM_ADD_SUB);
     sub_k(y, x);
     TIME_END(OTHER_DIM_ADD_SUB);
 
-    // ========== y = b * (y - x) ========== output will be in NTT form
+    // 复用 `y` 作为 external-product scratch/output。GSW bit b 是 encrypted：
+    // b=0 得到 zero 的 encryption，最终加回后保留 x_orig；b=1 得到
+    // y_orig-x_orig，最终加回后选择 y_orig。external_product 的 RLWE output
+    // 是 NTT form。
     TIME_START(OTHER_DIM_MUX_EXTERN);
     data_gsw_.external_product(selection_cipher, y, y, LogContext::OTHER_DIM_MUX);
     TIME_END(OTHER_DIM_MUX_EXTERN);
 
-    // ========== y = INTT(y) ==========
+    // external-product output 要先转回 coefficient form，才能加到仍保持
+    // coefficient-form 的 x 上。
     TIME_START(OTHER_DIM_INTT);
     intt_k(y);
     TIME_END(OTHER_DIM_INTT);
 
-    // ========== result = y + x ==========
+    // result 可能 alias x（常见的 reduction-in-place 路径）。y 是 scratch 且已经
+    // 被破坏；x 在这次 final add 前仍是 x_orig。
     TIME_START(OTHER_DIM_ADD_SUB);
     if (&result == &x) {
       add_inplace_k(x, y);
@@ -608,7 +667,13 @@ void PirServer::ext_prod_mux(RlweCt &x, RlweCt &y, GSWCt &selection_cipher, Rlwe
     TIME_END(OTHER_DIM_ADD_SUB);
 }
 
-//  single-loop level-order expansion  (root index = 1)
+// Algorithm 2 ExpandBFV，按单次 level-order heap walk 实现（root index = 1）。
+// 输入是一条 coefficient-form、K-limb、full-q packed BFV query。输出前
+// u = N0 + L_EP * (d - 1) 个 constant BFV ciphertexts：先是 N0 个 first-dim
+// one-hot slots，再是每个高维 selector 对应的 L_EP rows。client-side BitRev
+// packing 与这里的 leaf order 配套，因此 leaf i 解密到 BitRev(i) 处写入的
+// constant。位于 u 右侧的 internal nodes 在 Subs 前被 pruned，因为它们只会
+// 生成未使用的 zero leaves。
 std::vector<RlweCt>
 PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
   // ============== parameters
@@ -663,11 +728,13 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
   for (size_t i = 1; i < capacity; ++i) { // internal nodes only
     const int k = int{1} << (std::bit_width(i) - 1); // k = 2^{⌊log i⌋}   (span of this sub-tree)
 
+    // 当前 heap subtree 覆盖的第一个 returned leaf；>= u 时整棵 subtree 可跳过。
     const size_t left_leaf = i * capacity / k - capacity;
     if (left_leaf >= useful_cnt)
       continue;
 
     RlweCt c_prime = cts[i];
+    // σ_{N/k+1}: 当前 split level 对应的 Algorithm 2 automorphism。
     const uint32_t galois_k = DBConsts::PolyDegree / k + 1;
     TIME_START(APPLY_GALOIS);
     bvks::bv_apply_galois_inplace(c_prime, galois_k,
@@ -684,7 +751,7 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
     TIME_END("shift polynomial");
   }
 
-  // ==============  return the first  u  leaves: heap slots  capacity … capacity+u−1
+  // ============== return useful leaf slice: heap slots capacity … capacity+u−1
   return std::vector<RlweCt>(
       std::make_move_iterator(cts.begin() + capacity),
       std::make_move_iterator(cts.begin() + capacity + useful_cnt));
@@ -699,7 +766,9 @@ void PirServer::set_client_gsw_key(const size_t client_id, GSWCt gsw_key) {
 }
 
 
-// Get original plaintext (before NTT transformation) from recorded entries
+// 仅 test oracle：这里通过 direct DB lookup 返回记录的 pre-NTT plaintext，
+// 因此会向 server 暴露 requested index。它只用于测试中对比 decrypt_mod_q
+// output，不属于 PIR protocol。
 RlwePt PirServer::direct_get_original_plaintext(const size_t plaintext_idx) const {
   auto it = recorded_pts_.find(plaintext_idx);
   if (it == recorded_pts_.end()) {
@@ -710,47 +779,68 @@ RlwePt PirServer::direct_get_original_plaintext(const size_t plaintext_idx) cons
 
 
 RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
-  // receive the query from the client
+  // 这是 Algorithm 4 executable skeleton。Function boundary：
+  //   entry 前外部负责：client key setup 与 packed query transport
+  //   本函数内部负责：Algorithm 2 expansion、Algorithm 3 completion、lines 4-15 eval
+  //   return 后外部负责：save_resp_to_stream 做 response serialization
 
   // ========================== Expansion & conversion ==========================
+  // 阶段 1 / Algorithm 2 ExpandBFV：把一条 full-q packed BFV query unpack 成
+  // 得到 N0 个 first-dim BFV constants，加上每个 remaining selector 的 L_EP rows。
   TIME_START(EXPAND_TIME);
   std::vector<RlweCt> query_vector = fast_expand_qry(client_id, query);
   TIME_END(EXPAND_TIME);
 
-  // Reconstruct RGSW queries
+  // 阶段 2 / Algorithm 3 completion：把 expanded BFV selector rows 转成完整
+  // RGSW ciphertexts；bottom half 由已注册到 server 的 client RGSW(s) key 补齐。
+  // Reconstruct Algorithm 3 / QueryUnpack RGSW selectors from the expanded BFV
+  // stream. fast_expand_qry returns:
+  //   [0, N0)                         first-dimension BFV vector
+  //   [N0 + (i-1)*L_EP, N0 + i*L_EP) selector top half for that later dim
+  // Each later dimension contributes exactly L_EP BFV ciphertexts, already
+  // aligned with the MSB-first gadget rows used by QueryPack/RGSW layout.
   TIME_START(CONVERT_TIME);
   const size_t l_ep = pir_params_.get_l();
-  std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSW ciphertexts
+  std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSWCt containers；prose 语义是 RGSW selectors
   if (pir_params_.get_num_dims() != 1) {  // if we do need futher dimensions
     for (size_t i = 1; i < pir_params_.get_num_dims(); i++) {
-      // l_ep RLWE ciphertexts per dim (one per gadget power).
+      // Copy the selector's top L_EP rows out of the expanded vector. The
+      // completion key stored in client_gsw_keys_ is RGSW(s) and was generated
+      // with L_KEY; query_to_gsw uses it only to derive the bottom half. The
+      // resulting selector consumed by data external products has 2*L_EP rows.
       std::vector<RlweCt> lwe_vector;
       lwe_vector.reserve(l_ep);
       for (size_t k = 0; k < l_ep; ++k) {
         auto ptr = pir_params_.get_fst_dim_sz() + (i - 1) * l_ep + k;
         lwe_vector.push_back(query_vector[ptr]);
       }
-      // Converting the BFV ciphertexts to GSW ciphertext by doing external product
+      // 用 expanded BFV top rows completion 成完整 RGSW selector ciphertext。
       key_gsw_.query_to_gsw(lwe_vector, client_gsw_keys_[client_id], gsw_vec[i - 1]);
     }
   }
   TIME_END(CONVERT_TIME);
 
   // ========================== Evaluations ==========================
-  // Evaluate the first dimension
+  // 阶段 3 / Algorithm 4 lines 4-6：只取前 N0 个 expanded BFV ciphertexts
+  // 做 database matrix-vector product。result vector 是 Nrest encrypted
+  // 这些 candidates 每个对应一个 remaining-dimensional position。
   TIME_START(FST_DIM_TIME);
   query_vector.resize(pir_params_.get_fst_dim_sz());
   std::vector<RlweCt> mid_db = evaluate_first_dim(query_vector);
   TIME_END(FST_DIM_TIME);
 
-  // Evaluate the other dimensions
+  // 阶段 4 / Algorithm 4 lines 7-14：每个 RGSW selector bit 驱动一层 MUX，
+  // 在 remaining encrypted candidates 上持续归约，直到只剩一条 ciphertext。
   TIME_START(OTHER_DIM_TIME);
   RlweCt result = evaluate_other_dim(mid_db, gsw_vec);
   TIME_END(OTHER_DIM_TIME);
 
   // ========================== Post-processing ==========================
   TIME_START(MOD_SWITCH);
-  // we can always switch to the small modulus it correctness is guaranteed.
+  // 阶段 5 / Algorithm 4 line 15：所有 homomorphic operation 完成后，才把
+  // full-q ciphertext 转到 single-limb small-q response modulus。提前 switching
+  // 会损失 noise headroom，并破坏与 first-dim matmul、RGSW external products、
+  // Galois-key material 的 parameter agreement。
   if (DBConsts::SmallQWidth < DBConsts::RnsMods[0]) {
     DEBUG_PRINT("Modulus switching for a single modulus...");
     const uint64_t small_q = pir_params_.get_small_q();
@@ -766,7 +856,14 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
 
 size_t PirServer::save_resp_to_stream(const RlweCt &response,
                                       std::stringstream &stream) {
-  // For now, we only serve the single modulus case.
+  // 这里是 post-ModSwitch ciphertext 的 response codec。这里序列化 tests/prototype
+  // transport 实际使用的 wire bytes：先 c0 后 c1；每个 coefficient 精确使用
+  // small_q_width 个 low bits，并以 LSB-first 写入 byte stream。query/key bytes
+  // 不在这里建模；make_query 直接接收 in-memory objects。
+  //
+  // 在 trust boundary 上，这个 research prototype format 不做 authentication
+  // 或 integrity protection；对应 reader side 不检查 payload 后 trailing
+  // bytes/padding。
 
   // --- 1.  Runtime parameters ------------------------------------------------
   const size_t small_q = pir_params_.get_small_q();
@@ -833,11 +930,17 @@ void PirServer::fill_inter_res() {
 }
 
 void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
+  // 所有 homomorphic work 完成后才做 full-q -> small-q centered rescale。
+  // 输入是 DBConsts::RnsMods 下的 coefficient-form response data；输出是 `q`
+  // 下的 single-limb coefficient-form ciphertext，供 response codec 使用。
+  // 不要把它移到 evaluation 前：early switching 会消耗 noise headroom，并让
+  // ciphertext 与 full-q MUX/eval path 不兼容。
   constexpr size_t coeff_count = DBConsts::PolyDegree;
   constexpr size_t K = DBConsts::RnsMods.size();
   const auto &qs = pir_params_.get_rns_mods();
 
   if constexpr (K == 1) {
+    // 在 logical K=1 path 中，每个 coefficient 直接 centered-rescale q_full -> q。
     const uint64_t Q = qs[0];
     uint64_t *data0 = ciphertext.c0.data();
     uint64_t *data1 = ciphertext.c1.data();
@@ -846,9 +949,10 @@ void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
       data1[i] = utils::rescale(data1[i], Q, q);
     }
   } else {
-    // K=2: CRT-compose each coefficient, drop q1 with rounding, then reuse the
-    // single-limb centered rescale q0 -> q. This avoids a 120-bit by 50-bit
-    // product in the 60+60-bit config.
+    // 在 actual K=2 path 中，先把 high limb q1 rounded-drop 到 q0，再复用 single-limb
+    // centered rescale q0 -> q。这不是 composite first-dim q1*q2 helper path；
+    // 它操作的是 logical two-RNS-limb response ciphertext，最终收缩成一个
+    // small-q limb。
     const uint64_t q0 = qs[0];
     const uint64_t q1 = qs[1];
     const uint64_t q0_inv_mod_q1 = pir_params_.get_rns_tables().q0_inv_mod_q1;
@@ -876,10 +980,6 @@ void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
     ciphertext.c1.resize(coeff_count);
   }
 }
-
-
-
-
 
 
 

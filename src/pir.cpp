@@ -9,6 +9,11 @@
 #include <string>
 
 void PirParams::init_composite_rns() {
+  // [Composite NTT] 流水线把 q=q1*q2 当成一个 logical K=1 modulus；
+  // 只有首维 matrix multiplication 临时把 coefficient 投影到 q1/q2，
+  // 以使用 29-bit 的 32x32->64 kernel。w_crt 是在 composite q 下可用的
+  // 2N-th root，必须注册给 NTT wrapper；它不是普通 prime-modulus root。
+  //
   // Generate two NTT-friendly primes from FirstDimRNSMods bit widths and
   // combine them: q = q1 * q2, single composite limb visible to the rest of
   // the pipeline. The first-dim matmul will split each NTT coefficient back
@@ -75,6 +80,12 @@ PirParams::PirParams()
   base_log2_key_ = (ct_mod_width + l_key_ - 1) / l_key_;
 
   // =============== Database shape calculation ===============
+  // N0 is fst_dim_sz_: the number of plaintext slots selected by the first
+  // matrix-multiplication dimension. Nrest is get_other_dim_sz(): the remaining
+  // logical rows packed behind N0, rounded up so num_pt_ covers the target DB.
+  // num_dims_ counts the first dimension plus recursive expansion dimensions.
+  // Expansion capacity is constrained by TREE_HEIGHT and L_EP because each
+  // expansion level contributes selector capacity through the data gadget rows.
   size_t target_num_pt = DBConsts::DB_SIZE_MB * 1024 * 1024 / get_pt_size();
   DEBUG_PRINT("target_num_pt: " << target_num_pt);
   // Per-dim query slot count is l_ep_ (one BFV per gadget power).
