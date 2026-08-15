@@ -650,7 +650,10 @@ trial leaf index 由固定 seed 的平台无关 SplitMix64 生成，并取模 `l
 不能复用当前可能 stale 的 `build/`。新增 macOS x86 benchmark 入口使用独立目录，
 例如 `build-x86_64-benchmark/`，并同时：
 
-- 在 `/usr/bin/arch -x86_64` 进程下执行 configure/build/run；
+- 使用 native CMake configure/build，并把 `CMAKE_CXX_COMPILER` 固定为
+  `/usr/bin/arch;-x86_64;/usr/bin/clang++`；运行 binary 时使用
+  `/usr/bin/arch -x86_64`。Homebrew CMake 本身只有 arm64 slice，不能直接放在
+  `arch -x86_64` 下执行；
 - 设置 `CMAKE_OSX_ARCHITECTURES=x86_64`；
 - 设置 `CMAKE_BUILD_TYPE=Benchmark`；
 - 设置 `ACTIVE_CONFIG=CONFIG_N2048_K1_COMP`；

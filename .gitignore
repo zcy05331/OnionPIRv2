@@ -29,4 +29,12 @@ openfhe_test/
 claude_resp/
 codex_resp/
 .*
+
+# Dedicated generated benchmark builds and transient result artifacts.
+build-*/
+!outputs/
+outputs/*
+!outputs/merkle_baselines/
+outputs/merkle_baselines/*
+!outputs/merkle_baselines/.gitkeep
 overleaf/

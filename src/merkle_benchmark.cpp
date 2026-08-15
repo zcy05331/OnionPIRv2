@@ -7,13 +7,22 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -197,10 +206,22 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
   write_string(out, environment.config);
   out << ",\n    \"architecture\": ";
   write_string(out, environment.architecture);
+  out << ",\n    \"process_architecture\": ";
+  write_string(out, environment.process_architecture);
+  out << ",\n    \"operating_system\": ";
+  write_string(out, environment.operating_system);
+  out << ",\n    \"cpu\": ";
+  write_string(out, environment.cpu);
+  out << ",\n    \"compiler\": ";
+  write_string(out, environment.compiler);
+  out << ",\n    \"cmake_version\": ";
+  write_string(out, environment.cmake_version);
   out << ",\n    \"hexl_enabled\": "
       << (environment.hexl_enabled ? "true" : "false")
       << ",\n    \"hexl_version\": ";
   write_string(out, environment.hexl_version);
+  out << ",\n    \"hexl_path\": ";
+  write_string(out, environment.hexl_path);
   out << ",\n    \"rosetta\": " << (environment.rosetta ? "true" : "false")
       << ",\n    \"non_native_label\": ";
   write_string(out, environment.non_native_label);
@@ -240,6 +261,7 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
   write_string(out, workload.paper_row);
   out << ",\n    \"warmups\": " << workload.warmups
       << ",\n    \"measured_trials\": " << workload.measured_trials
+      << ",\n    \"trial_seed\": " << workload.trial_seed
       << ",\n    \"trial_leaf_indices\": ";
   write_integer_array(out, workload.trial_leaf_indices);
   out << ",\n    \"optional_workloads\": [";
@@ -748,4 +770,296 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
       reference, workload.tree_height, response_shape);
   finalize_case_statistics(result);
   return execution;
+}
+
+namespace {
+
+std::string environment_value(const char *name,
+                              const std::string &fallback = "") {
+  const char *value = std::getenv(name);
+  return value == nullptr ? fallback : std::string(value);
+}
+
+uint64_t splitmix64_next(uint64_t &state) {
+  state += 0x9e3779b97f4a7c15ULL;
+  uint64_t value = state;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
+
+MerkleWorkload make_benchmark_workload(size_t leaf_count) {
+  if (leaf_count < 2 || !std::has_single_bit(leaf_count)) {
+    throw std::invalid_argument(
+        "Merkle benchmark leaf count must be a power of two >= 2");
+  }
+  return {leaf_count,
+          static_cast<size_t>(std::bit_width(leaf_count) - 1), 32};
+}
+
+PirParams make_benchmark_reference(const MerkleWorkload &workload) {
+  PirParams scheme;
+  if (scheme.get_poly_degree() != 2048 || scheme.get_ct_mod_width() != 58 ||
+      scheme.get_num_bits_per_coeff() != 12 || scheme.get_l() != 6 ||
+      scheme.get_l_key() != 10 || DBConsts::L_KS != 8 ||
+      std::bit_width(scheme.get_small_q() - 1) != 22 ||
+      scheme.get_noise_std_dev() != 2.55) {
+    throw std::invalid_argument(
+        "Merkle benchmarks require CONFIG_N2048_K1_COMP v2 parameters");
+  }
+
+  const size_t target_num_pt = flat_target_num_pt(workload);
+  if (workload.leaf_count >= (size_t{1} << 24)) {
+    return scheme.with_layout({target_num_pt, 10, true});
+  }
+  for (size_t height = 0; height <= 10; ++height) {
+    try {
+      return scheme.with_layout({target_num_pt, height, true});
+    } catch (const std::runtime_error &) {
+      // Try the next expansion height.
+    }
+  }
+  throw std::runtime_error("No v2 reference layout for benchmark workload");
+}
+
+BenchmarkTrialPlan make_trial_plan(const MerkleWorkload &workload,
+                                   size_t warmups, size_t measured,
+                                   uint64_t seed) {
+  if (measured == 0) {
+    throw std::invalid_argument(
+        "Merkle benchmark requires at least one measured trial");
+  }
+  BenchmarkTrialPlan plan;
+  plan.warmup_leaf_indices.reserve(warmups);
+  plan.measured_leaf_indices.reserve(measured);
+  uint64_t state = seed;
+  for (size_t i = 0; i < warmups; ++i) {
+    plan.warmup_leaf_indices.push_back(
+        splitmix64_next(state) % workload.leaf_count);
+  }
+  for (size_t i = 0; i < measured; ++i) {
+    plan.measured_leaf_indices.push_back(
+        splitmix64_next(state) % workload.leaf_count);
+  }
+  return plan;
+}
+
+std::vector<BenchmarkCaseResult> execute_case_set(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials, const std::string &name_suffix = "") {
+  BenchmarkCaseExecution standard =
+      run_standard_case(workload, reference, trials);
+  BenchmarkCaseExecution flat =
+      run_merkle_flat_case(workload, reference, trials);
+  BenchmarkCaseExecution layerwise =
+      run_merkle_layerwise_case(workload, reference, trials);
+  validate_matching_path_communication(flat.result.communication,
+                                       layerwise.result.communication);
+  if (flat.measured_paths != layerwise.measured_paths) {
+    throw std::runtime_error(
+        "Flat and layerwise measured Merkle paths differ");
+  }
+  standard.result.name += name_suffix;
+  flat.result.name += name_suffix;
+  layerwise.result.name += name_suffix;
+  return {std::move(standard.result), std::move(flat.result),
+          std::move(layerwise.result)};
+}
+
+uint64_t detected_physical_memory_bytes() {
+#if defined(__APPLE__)
+  uint64_t bytes = 0;
+  size_t length = sizeof(bytes);
+  if (sysctlbyname("hw.memsize", &bytes, &length, nullptr, 0) == 0) {
+    return bytes;
+  }
+  return 0;
+#else
+  const long pages = sysconf(_SC_PHYS_PAGES);
+  const long page_size = sysconf(_SC_PAGESIZE);
+  if (pages <= 0 || page_size <= 0) return 0;
+  return checked_multiply(static_cast<uint64_t>(pages),
+                          static_cast<uint64_t>(page_size),
+                          "detected physical memory");
+#endif
+}
+
+bool running_under_rosetta() {
+#if defined(__APPLE__) && defined(__x86_64__)
+  int translated = 0;
+  size_t length = sizeof(translated);
+  return sysctlbyname("sysctl.proc_translated", &translated, &length,
+                      nullptr, 0) == 0 && translated == 1;
+#else
+  return false;
+#endif
+}
+
+std::string paper_row_for(const MerkleWorkload &workload) {
+  if (workload.leaf_count == (size_t{1} << 24)) return "1 GB";
+  if (workload.leaf_count == (size_t{1} << 27)) return "8 GB";
+  return "custom";
+}
+
+void append_case_set(std::vector<BenchmarkCaseResult> &destination,
+                     std::vector<BenchmarkCaseResult> source) {
+  destination.insert(destination.end(),
+                     std::make_move_iterator(source.begin()),
+                     std::make_move_iterator(source.end()));
+}
+
+}  // namespace
+
+uint64_t estimate_merkle_benchmark_peak_bytes(size_t leaf_count) {
+  const MerkleWorkload workload = make_benchmark_workload(leaf_count);
+  const PirParams reference = make_benchmark_reference(workload);
+  const uint64_t flat_bytes = physical_database_bytes(reference);
+  const std::vector<LayerLayout> layouts =
+      plan_layer_layouts(workload.tree_height, 96, reference);
+  uint64_t layerwise_bytes = 0;
+  for (const LayerLayout &layout : layouts) {
+    layerwise_bytes = checked_add(layerwise_bytes,
+                                  physical_database_bytes(layout.params),
+                                  "layerwise peak bytes");
+  }
+  return std::max(flat_bytes, layerwise_bytes);
+}
+
+BenchmarkReport run_merkle_benchmark_suite(
+    const MerkleBenchmarkOptions &options) {
+  const MerkleWorkload workload =
+      make_benchmark_workload(options.leaf_count);
+  const PirParams reference = make_benchmark_reference(workload);
+  const BenchmarkTrialPlan trials = make_trial_plan(
+      workload, options.warmups, options.measured_trials,
+      options.trial_seed);
+
+  BenchmarkReport report;
+  report.schema_version = "onionpir-merkle-baselines-v1";
+  report.environment.commit = environment_value("ONIONPIR_BENCH_COMMIT");
+  report.environment.branch = environment_value("ONIONPIR_BENCH_BRANCH");
+  report.environment.build_type = "Benchmark";
+  report.environment.config = "CONFIG_N2048_K1_COMP";
+#if defined(__x86_64__)
+  report.environment.architecture = "x86_64";
+#elif defined(__aarch64__) || defined(__arm64__)
+  report.environment.architecture = "arm64";
+#else
+  report.environment.architecture = "unknown";
+#endif
+  report.environment.process_architecture =
+      environment_value("ONIONPIR_BENCH_PROCESS_ARCH", "x86_64");
+  report.environment.operating_system =
+      environment_value("ONIONPIR_BENCH_OS");
+  report.environment.cpu = environment_value("ONIONPIR_BENCH_CPU");
+  report.environment.compiler =
+      environment_value("ONIONPIR_BENCH_COMPILER");
+  report.environment.cmake_version =
+      environment_value("ONIONPIR_BENCH_CMAKE");
+#if defined(ONIONPIR_USE_HEXL)
+  report.environment.hexl_enabled = true;
+#else
+  report.environment.hexl_enabled = false;
+#endif
+  report.environment.hexl_version = "1.2.6";
+  report.environment.hexl_path = environment_value("ONIONPIR_BENCH_HEXL_PATH");
+  report.environment.rosetta = running_under_rosetta();
+  report.environment.non_native_label = report.environment.rosetta
+      ? "x86_64 + Intel HEXL under Rosetta 2 on Apple M4; non-native result"
+      : "This run is not the frozen Apple M4 Rosetta benchmark environment";
+
+  report.paper_alignment.paper =
+      "OnionPIRv2: Efficient Single-Server PIR (2025/1142)";
+  report.paper_alignment.revision = "2025-1142.pdf";
+  report.paper_alignment.sections = {"4.1", "4.2", "4.3"};
+  report.paper_alignment.poly_degree = 2048;
+  report.paper_alignment.log_q = 58;
+  report.paper_alignment.log_t = 13;
+  report.paper_alignment.log_q_prime = 22;
+  report.paper_alignment.L_KEY = 10;
+  report.paper_alignment.L_EP = 6;
+  report.paper_alignment.L_KS = 8;
+  report.paper_alignment.sigma = 2.55;
+  report.paper_alignment.estimated_security_bits = 117;
+  report.paper_alignment.reference_hardware =
+      "Intel Xeon Platinum 8358 2.60 GHz, Ubuntu 22.04, AVX-512";
+  report.paper_alignment.local_result_is_hardware_replication = false;
+
+  report.workload.leaf_count = workload.leaf_count;
+  report.workload.tree_height = workload.tree_height;
+  report.workload.node_bytes = workload.node_bytes;
+  report.workload.nodes_per_plaintext = 96;
+  report.workload.paper_row = paper_row_for(workload);
+  report.workload.warmups = options.warmups;
+  report.workload.measured_trials = options.measured_trials;
+  report.workload.trial_seed = options.trial_seed;
+  report.workload.trial_leaf_indices.assign(
+      trials.measured_leaf_indices.begin(), trials.measured_leaf_indices.end());
+
+  append_case_set(report.cases,
+                  execute_case_set(workload, reference, trials));
+
+  OptionalWorkloadResult optional;
+  optional.leaf_count = size_t{1} << 27;
+  optional.tree_height = 27;
+  optional.paper_row = "8 GB";
+  if (workload.leaf_count == optional.leaf_count) {
+    optional.status = "primary_workload";
+  } else if (!options.run_optional_8gb) {
+    optional.status = "not_requested";
+    optional.skip_reason = "optional 8 GB run flag was not set";
+  } else {
+    const uint64_t estimated =
+        estimate_merkle_benchmark_peak_bytes(optional.leaf_count);
+    const uint64_t physical_memory = detected_physical_memory_bytes();
+    constexpr uint64_t safety_margin = uint64_t{2} << 30;
+    if (physical_memory == 0 ||
+        estimated > physical_memory ||
+        safety_margin > physical_memory - estimated) {
+      optional.status = "skipped_resource_limit";
+      optional.skip_reason =
+          "estimated peak " + std::to_string(estimated) +
+          " bytes plus 2147483648-byte safety margin exceeds detected " +
+          std::to_string(physical_memory) + " bytes";
+    } else {
+      optional.status = "completed";
+      const MerkleWorkload optional_workload =
+          make_benchmark_workload(optional.leaf_count);
+      const PirParams optional_reference =
+          make_benchmark_reference(optional_workload);
+      const BenchmarkTrialPlan optional_trials = make_trial_plan(
+          optional_workload, options.warmups, options.measured_trials,
+          options.trial_seed ^ 0x8b47424950524952ULL);
+      append_case_set(
+          report.cases,
+          execute_case_set(optional_workload, optional_reference,
+                           optional_trials, "_optional_8gb"));
+    }
+  }
+  report.workload.optional_workloads.push_back(std::move(optional));
+  return report;
+}
+
+void print_benchmark_report(const BenchmarkReport &report) {
+  std::cout << report.environment.non_native_label << '\n';
+  std::cout << "case,correct,server_ms,paper_MBps,padded_MBps,online_bytes,"
+               "first_session_bytes\n";
+  for (const BenchmarkCaseResult &result : report.cases) {
+    std::cout << result.name << ','
+              << (result.correctness_passed ? "true" : "false") << ','
+              << milliseconds(result.timing.server_compute) << ','
+              << result.paper_server_throughput_MBps << ','
+              << result.padded_scan_throughput_MBps << ','
+              << result.communication.online_total_bytes_mixed << ','
+              << result.communication.first_session_total_bytes_mixed
+              << '\n';
+  }
+  for (const OptionalWorkloadResult &optional :
+       report.workload.optional_workloads) {
+    std::cout << "optional " << optional.paper_row << ": " << optional.status;
+    if (!optional.skip_reason.empty()) {
+      std::cout << " (" << optional.skip_reason << ')';
+    }
+    std::cout << '\n';
+  }
 }

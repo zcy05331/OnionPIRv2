@@ -38,12 +38,13 @@
 Run:
 
 ```bash
-/usr/bin/arch -x86_64 cmake -S . -B build-x86_64-tdd \
+cmake -S . -B build-x86_64-tdd \
   -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-  -DCMAKE_BUILD_TYPE=Debug \
+  '-DCMAKE_CXX_COMPILER=/usr/bin/arch;-x86_64;/usr/bin/clang++' \
+  -DCMAKE_BUILD_TYPE=Benchmark \
   -DACTIVE_CONFIG=CONFIG_N2048_K1_COMP \
   -DUSE_HEXL=ON
-/usr/bin/arch -x86_64 cmake --build build-x86_64-tdd -j2
+cmake --build build-x86_64-tdd -j2
 /usr/bin/arch -x86_64 ./build-x86_64-tdd/Onion-PIR --test definitely_missing
 echo $?
 ```
@@ -80,7 +81,7 @@ require_test(success_count == num_experiments,
 Run:
 
 ```bash
-/usr/bin/arch -x86_64 cmake --build build-x86_64-tdd -j2
+cmake --build build-x86_64-tdd -j2
 /usr/bin/arch -x86_64 ./build-x86_64-tdd/Onion-PIR --test definitely_missing >/tmp/onionpir-missing-test.log 2>&1; test $? -ne 0
 ```
 
@@ -139,7 +140,7 @@ Register route `runtime_layout` in `tests.h` and `run_test.cpp`.
 Run:
 
 ```bash
-/usr/bin/arch -x86_64 cmake --build build-x86_64-tdd -j2
+cmake --build build-x86_64-tdd -j2
 ```
 
 Expected: compilation fails because `PirLayoutConfig`, `with_layout`, and the four-argument `calculate_db_shape` do not exist.
@@ -186,7 +187,7 @@ Implement `apply_layout` by validating `target_num_pt > 0`, `h <= log2(N)`, call
 Run:
 
 ```bash
-/usr/bin/arch -x86_64 cmake --build build-x86_64-tdd -j2
+cmake --build build-x86_64-tdd -j2
 /usr/bin/arch -x86_64 ./build-x86_64-tdd/Onion-PIR --test runtime_layout --experiments 1 --warmup 0
 /usr/bin/arch -x86_64 ./build-x86_64-tdd/Onion-PIR --test db_shape --experiments 1 --warmup 0
 ```
@@ -580,12 +581,13 @@ Require power-of-two leaves. Default to H=24. Estimate physical bytes before con
 The script must execute:
 
 ```bash
-/usr/bin/arch -x86_64 cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" \
+cmake --fresh -S "$PROJECT_DIR" -B "$BUILD_DIR" \
   -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  '-DCMAKE_CXX_COMPILER=/usr/bin/arch;-x86_64;/usr/bin/clang++' \
   -DCMAKE_BUILD_TYPE=Benchmark \
   -DACTIVE_CONFIG=CONFIG_N2048_K1_COMP \
   -DUSE_HEXL=ON
-/usr/bin/arch -x86_64 cmake --build "$BUILD_DIR" -j2
+cmake --build "$BUILD_DIR" --clean-first -j2
 file "$BUILD_DIR/Onion-PIR" | grep 'x86_64'
 /usr/bin/arch -x86_64 "$BUILD_DIR/Onion-PIR" \
   --test merkle_benchmarks --warmup 3 --experiments 5 \

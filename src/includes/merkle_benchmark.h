@@ -56,8 +56,14 @@ struct BenchmarkEnvironment {
   std::string build_type;
   std::string config;
   std::string architecture;
+  std::string process_architecture;
+  std::string operating_system;
+  std::string cpu;
+  std::string compiler;
+  std::string cmake_version;
   bool hexl_enabled = false;
   std::string hexl_version;
+  std::string hexl_path;
   bool rosetta = false;
   std::string non_native_label;
 };
@@ -95,6 +101,7 @@ struct BenchmarkWorkload {
   std::string paper_row;
   uint64_t warmups = 0;
   uint64_t measured_trials = 0;
+  uint64_t trial_seed = 0;
   std::vector<uint64_t> trial_leaf_indices;
   std::vector<OptionalWorkloadResult> optional_workloads;
 };
@@ -119,6 +126,14 @@ struct BenchmarkCaseExecution {
   std::vector<MerklePath> measured_paths;
 };
 
+struct MerkleBenchmarkOptions {
+  size_t leaf_count = size_t{1} << 24;
+  size_t warmups = 3;
+  size_t measured_trials = 5;
+  uint64_t trial_seed = 0x4f6e696f6e504952ULL;
+  bool run_optional_8gb = false;
+};
+
 uint64_t modeled_helper_key_bytes(const PirParams &reference);
 CommunicationStats communication_stats(
     const PirParams &reference, size_t pir_call_count,
@@ -140,3 +155,8 @@ BenchmarkCaseExecution run_merkle_flat_case(
 BenchmarkCaseExecution run_merkle_layerwise_case(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials);
+
+BenchmarkReport run_merkle_benchmark_suite(
+    const MerkleBenchmarkOptions &options);
+void print_benchmark_report(const BenchmarkReport &report);
+uint64_t estimate_merkle_benchmark_peak_bytes(size_t leaf_count);

@@ -57,7 +57,8 @@ def main():
         "-t", "--test", default="pir",
         help="Test to run (default: pir). Options: pir, bfv, serial, ext_prod, "
              "ext_prod_mux, fst_dim, batch_decomp, fast_expand, raw_pt_ct, "
-             "decrypt_mod_q, mod_switch, sk_mod_switch, db_shape, bv_ks, cpu_info",
+             "decrypt_mod_q, mod_switch, db_shape, bv_ks, cpu_info, "
+             "merkle_benchmarks",
     )
     parser.add_argument(
         "-o", "--output", metavar="FILE",
@@ -69,7 +70,7 @@ def main():
     )
     parser.add_argument(
         "-n", "--experiments", type=int, default=5,
-        help="Number of experiment iterations (default: 10)",
+        help="Number of experiment iterations (default: 5)",
     )
     parser.add_argument(
         "-w", "--warmup", type=int, default=3,
@@ -78,6 +79,18 @@ def main():
     parser.add_argument(
         "--build-only", action="store_true",
         help="Build without running",
+    )
+    parser.add_argument(
+        "--benchmark-json", metavar="FILE",
+        help="Write structured Merkle benchmark JSON to FILE",
+    )
+    parser.add_argument(
+        "--leaf-count", type=int, default=1 << 24,
+        help="Merkle benchmark leaf count (power of two; default: 2^24)",
+    )
+    parser.add_argument(
+        "--run-optional-8gb", action="store_true",
+        help="Attempt the resource-gated 2^27-leaf paper workload",
     )
     parser.add_argument(
         "-c", "--config", default="k1_comp",
@@ -107,6 +120,22 @@ def main():
                "--warmup", str(args.warmup)]
     if args.no_compress:
         run_cmd.append("--no-compress")
+    if args.test == "merkle_benchmarks":
+        if args.leaf_count < 2 or args.leaf_count & (args.leaf_count - 1):
+            parser.error("--leaf-count must be a power of two >= 2")
+        run_cmd.extend(["--leaf-count", str(args.leaf_count)])
+        if args.benchmark_json:
+            benchmark_path = args.benchmark_json
+            if "/" not in benchmark_path:
+                benchmark_dir = os.path.join(OUTPUT_DIR, "merkle_baselines")
+                os.makedirs(benchmark_dir, exist_ok=True)
+                benchmark_path = os.path.join(benchmark_dir, benchmark_path)
+            else:
+                os.makedirs(os.path.dirname(os.path.abspath(benchmark_path)),
+                            exist_ok=True)
+            run_cmd.extend(["--benchmark-json", benchmark_path])
+        if args.run_optional_8gb:
+            run_cmd.append("--run-optional-8gb")
 
     # --- Output redirection ---
     output_file = None

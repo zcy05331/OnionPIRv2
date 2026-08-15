@@ -1,27 +1,100 @@
+#include "merkle_benchmark.h"
 #include "tests.h"
+
 #include <cstring>
-#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
-int main(int argc, char *argv[]) {
-  std::string test_name = "pir";
-  size_t num_experiments = 10;
-  size_t warmup = 3;
+namespace {
 
-  for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--test") == 0 && i + 1 < argc) {
-      test_name = argv[++i];
-    } else if (strcmp(argv[i], "--experiments") == 0 && i + 1 < argc) {
-      num_experiments = std::atoi(argv[++i]);
-    } else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc) {
-      warmup = std::atoi(argv[++i]);
-    }
+size_t parse_size_argument(const char *option, const char *value) {
+  std::string text(value);
+  size_t parsed_characters = 0;
+  unsigned long long parsed = 0;
+  try {
+    parsed = std::stoull(text, &parsed_characters, 10);
+  } catch (const std::exception &) {
+    throw std::invalid_argument(std::string(option) +
+                                " requires a non-negative integer");
   }
+  if (parsed_characters != text.size() ||
+      parsed > std::numeric_limits<size_t>::max()) {
+    throw std::invalid_argument(std::string(option) +
+                                " is outside the size_t range");
+  }
+  return static_cast<size_t>(parsed);
+}
 
-  TimerLogger::setWarmup(warmup);
+const char *require_value(int argc, char *argv[], int &index) {
+  if (index + 1 >= argc) {
+    throw std::invalid_argument(std::string(argv[index]) +
+                                " requires a value");
+  }
+  return argv[++index];
+}
 
-  PirTest test;
-  test.num_experiments = num_experiments + warmup;
-  test.run_test(test_name);
-  return 0;
+}  // namespace
+
+int main(int argc, char *argv[]) {
+  try {
+    std::string test_name = "pir";
+    size_t num_experiments = 10;
+    size_t warmup = 3;
+    size_t leaf_count = size_t{1} << 24;
+    std::string benchmark_json;
+    bool run_optional_8gb = false;
+
+    for (int i = 1; i < argc; ++i) {
+      if (std::strcmp(argv[i], "--test") == 0) {
+        test_name = require_value(argc, argv, i);
+      } else if (std::strcmp(argv[i], "--experiments") == 0) {
+        num_experiments = parse_size_argument(
+            "--experiments", require_value(argc, argv, i));
+      } else if (std::strcmp(argv[i], "--warmup") == 0) {
+        warmup = parse_size_argument("--warmup",
+                                     require_value(argc, argv, i));
+      } else if (std::strcmp(argv[i], "--leaf-count") == 0) {
+        leaf_count = parse_size_argument(
+            "--leaf-count", require_value(argc, argv, i));
+      } else if (std::strcmp(argv[i], "--benchmark-json") == 0) {
+        benchmark_json = require_value(argc, argv, i);
+      } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
+        run_optional_8gb = true;
+      } else if (std::strcmp(argv[i], "--no-compress") == 0) {
+        // Retained for run.py compatibility. Current query packing has one path.
+      } else {
+        throw std::invalid_argument(std::string("Unknown option: ") + argv[i]);
+      }
+    }
+
+    if (test_name == "merkle_benchmarks") {
+      MerkleBenchmarkOptions options;
+      options.leaf_count = leaf_count;
+      options.warmups = warmup;
+      options.measured_trials = num_experiments;
+      options.run_optional_8gb = run_optional_8gb;
+      BenchmarkReport report = run_merkle_benchmark_suite(options);
+      print_benchmark_report(report);
+      if (!benchmark_json.empty()) {
+        write_benchmark_report_json(report, benchmark_json);
+        std::cout << "Benchmark JSON: " << benchmark_json << '\n';
+      }
+      return 0;
+    }
+
+    if (num_experiments >
+        std::numeric_limits<size_t>::max() - warmup) {
+      throw std::overflow_error("experiment count plus warmup overflows");
+    }
+    TimerLogger::setWarmup(warmup);
+    PirTest test;
+    test.num_experiments = num_experiments + warmup;
+    test.run_test(test_name);
+    return 0;
+  } catch (const std::exception &error) {
+    std::cerr << "Error: " << error.what() << '\n';
+    return 1;
+  }
 }

@@ -36,6 +36,9 @@ python run.py [options]
 | `-o FILE`, `--output FILE` | Write results to file (bare name goes to `outputs/`) |
 | `-j N`, `--jobs N` | Parallel make jobs (default: all cores) |
 | `--build-only` | Build without running |
+| `--leaf-count N` | Merkle benchmark leaf count; power of two (default: `2^24`) |
+| `--benchmark-json FILE` | Write structured Merkle benchmark output |
+| `--run-optional-8gb` | Attempt the resource-gated `2^27`-leaf workload |
 | `-h`, `--help` | Show help message |
 
 **Examples:**
@@ -61,6 +64,41 @@ python3 run.py --build-only
 # Run a specific test
 python3 run.py -t fst_dim
 ```
+
+### Merkle PIR baselines on Apple Silicon
+
+The frozen comparison uses the paper-aligned v2 configuration
+`CONFIG_N2048_K1_COMP` (`n=2048`, `log(q)=58`, `log(t)=13`,
+`log(q')=22`, `L_KEY=10`, `L_EP=6`, `L_KS=8`, `sigma=2.55`). On an
+Apple M4 it deliberately runs an x86_64 binary with Intel HEXL 1.2.6 under
+Rosetta 2:
+
+```bash
+scripts/run_merkle_baselines_x86_64.sh
+```
+
+The script builds in the isolated `build-x86_64-benchmark/` directory, checks
+both the executable and HEXL archive architectures, runs the `2^24`-leaf
+(1 GB paper row) workload with 3 warmups and 5 measured trials, and writes JSON
+plus human-readable output under `outputs/merkle_baselines/`. Use environment
+variables for a bounded smoke run, for example:
+
+```bash
+LEAF_COUNT=256 WARMUPS=0 EXPERIMENTS=1 \
+  RESULT_STEM=smoke scripts/run_merkle_baselines_x86_64.sh
+```
+
+Set `RUN_OPTIONAL_8GB=1` to request the `2^27`-leaf paper row. It is skipped
+with an explicit `skipped_resource_limit` result unless estimated
+preprocessed storage plus a 2 GiB safety margin fits physical memory.
+
+The report labels these measurements
+`x86_64 + Intel HEXL under Rosetta 2 on Apple M4; non-native result`. They
+align protocol parameters and accounting with the paper, but they are not
+native M4 measurements or a reproduction of the paper's Xeon/AVX-512 timings.
+Query and helper-key byte counts are modeled seed-compressed sizes; response
+bytes are measured from the repository's serializer, so totals ending in
+`_mixed` are intentionally not described as fully measured wire traffic.
 
 **Available configs:** `k1`, `k1_comp` (default, composite-mod K=1), `k2_mp`, `n4096_k2_mp`. See `src/includes/database_constants.h` for per-config parameters.
 
