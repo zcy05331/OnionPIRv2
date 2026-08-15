@@ -313,23 +313,23 @@ void level_mat_mat_32(const uint32_t *A_data, const uint32_t *B_data,
                             level_qs.data());
   return;
 #else
-  // Scalar fallback. Per-output Barrett reduce; uint64 accumulator stays
-  // within bounds for the same reason as the AVX path (n · q² < 2^64).
-  const auto b64 = utils::barrett_u64_setup(q);
+  // The scalar path accumulates all n products in one lane. For the composite
+  // first-dimension kernel (n=512, q≈2^29), n*q^2 needs more than 64 bits.
+  const uint128_t q128 = static_cast<uint128_t>(q);
   for (size_t level = 0; level < levels; ++level) {
     const uint32_t *A_ptr = A_data + level * (m * n);
     const uint32_t *B_ptr = B_data + level * (n * 2);
     uint64_t       *C_ptr = out_data + level * (m * 2);
     for (size_t i = 0; i < m; ++i) {
       const uint32_t *Ar = A_ptr + i * n;
-      uint64_t t0 = 0, t1 = 0;
+      uint128_t t0 = 0, t1 = 0;
       for (size_t k = 0; k < n; ++k) {
         const uint64_t a = Ar[k];
         t0 += a * static_cast<uint64_t>(B_ptr[2 * k]);
         t1 += a * static_cast<uint64_t>(B_ptr[2 * k + 1]);
       }
-      C_ptr[2 * i]     = utils::barrett_reduce_u64(t0, b64);
-      C_ptr[2 * i + 1] = utils::barrett_reduce_u64(t1, b64);
+      C_ptr[2 * i]     = static_cast<uint64_t>(t0 % q128);
+      C_ptr[2 * i + 1] = static_cast<uint64_t>(t1 % q128);
     }
   }
 #endif
