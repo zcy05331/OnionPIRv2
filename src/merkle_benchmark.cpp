@@ -927,6 +927,11 @@ uint64_t estimate_merkle_benchmark_peak_bytes(size_t leaf_count) {
 
 BenchmarkReport run_merkle_benchmark_suite(
     const MerkleBenchmarkOptions &options) {
+  if (options.leaf_count > (size_t{1} << 24)) {
+    throw std::invalid_argument(
+        "Primary Merkle benchmark is capped at 2^24 leaves; request the "
+        "resource-gated 2^27 workload with --run-optional-8gb");
+  }
   const MerkleWorkload workload =
       make_benchmark_workload(options.leaf_count);
   const PirParams reference = make_benchmark_reference(workload);

@@ -11,6 +11,10 @@ namespace {
 
 size_t parse_size_argument(const char *option, const char *value) {
   std::string text(value);
+  if (text.empty() || text.front() == '-') {
+    throw std::invalid_argument(std::string(option) +
+                                " requires a non-negative integer");
+  }
   size_t parsed_characters = 0;
   unsigned long long parsed = 0;
   try {

@@ -102,4 +102,17 @@ void PirTest::test_merkle_benchmark_stats() {
   }
   require_test(rejected_count_mismatch,
                "accepted mismatched PIR call and response counts");
+
+  bool rejected_ungated_large_primary = false;
+  try {
+    MerkleBenchmarkOptions unsafe_options;
+    unsafe_options.leaf_count = size_t{1} << 27;
+    unsafe_options.warmups = 0;
+    unsafe_options.measured_trials = 1;
+    (void)run_merkle_benchmark_suite(unsafe_options);
+  } catch (const std::invalid_argument &) {
+    rejected_ungated_large_primary = true;
+  }
+  require_test(rejected_ungated_large_primary,
+               "accepted an ungated 8 GB primary workload");
 }

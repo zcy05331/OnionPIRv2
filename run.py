@@ -123,6 +123,9 @@ def main():
     if args.test == "merkle_benchmarks":
         if args.leaf_count < 2 or args.leaf_count & (args.leaf_count - 1):
             parser.error("--leaf-count must be a power of two >= 2")
+        if args.leaf_count > 1 << 24:
+            parser.error("--leaf-count is capped at 2^24; use "
+                         "--run-optional-8gb for the resource-gated 2^27 row")
         run_cmd.extend(["--leaf-count", str(args.leaf_count)])
         if args.benchmark_json:
             benchmark_path = args.benchmark_json
