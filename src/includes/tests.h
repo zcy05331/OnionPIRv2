@@ -55,6 +55,7 @@ class PirTest {
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();
+    void test_merkle_baseline();
     void test_bv_keyswitch();
     void test_hexl_ntt();
     void test_utils_arith();
