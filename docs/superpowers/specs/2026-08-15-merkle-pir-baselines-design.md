@@ -29,6 +29,7 @@ path naive baselines，并与标准 OnionPIRv2 在同一台机器、同一个构
 | 性能轮次 | 3 次 warmup + 5 次 measured trials |
 | 运行后端 | Apple M4 上的 `x86_64 + Intel HEXL + Rosetta 2` |
 | ARM64 | 不在本分支适配；所有结果标记为非 ARM64 原生性能 |
+| 服务端并行度 | 单线程，与 OnionPIRv2 论文评测定义一致 |
 | 密钥 | 每个 benchmark case 只生成一个 client secret 和一套 helper keys；各层共享 |
 | 在线通信 | 全部 query bytes + 全部 response bytes |
 | 首次会话通信 | 一套共享 helper keys + 在线通信 |
@@ -40,7 +41,8 @@ path naive baselines，并与标准 OnionPIRv2 在同一台机器、同一个构
 ### 论文参数对齐
 
 `k1_comp` 不是随便选的“能跑配置”，而是这条分支的论文锚点。对齐目标是
-`2025-1142.pdf` 中 OnionPIRv2 论文第 4.1 节和第 4.3 节的代表性参数组：
+Yue Chen 和 Ling Ren 的 *OnionPIRv2: Efficient Single-Server PIR*
+`2025-1142.pdf` 修订版，具体依据第 4.1--4.3 节（PDF 第 12--13 页）：
 
 - `n = 2048`
 - `log q ≈ 58`
@@ -50,17 +52,32 @@ path naive baselines，并与标准 OnionPIRv2 在同一台机器、同一个构
 - `L_EP = 6`
 - `L_KS = 8`
 - `σ = 2.55`
+- 论文估计安全性为 117 bits
 
 实现里 `PlainMod = 13` 表示生成一个 13-bit 目标 plaintext modulus；编码时每个
 coefficient 只承载 `PlainMod - 1 = 12` 个 payload bits，因此一个 2048-coefficient
 plaintext 的有效 payload 仍是 3072 bytes，也就是论文里评测的 3 KB entry 尺寸。
 
-2021 版 OnionPIR 的参数集只保留作历史背景，不进入这条实现分支。
+2021 版 OnionPIR（`2021-1081.pdf`）的 `n=4096` / 124-bit ciphertext
+modulus / 60-bit plaintext modulus 属于不同协议版本，只保留作历史
+背景，不进入这条实现分支，也不与 v2 数据混用。
 
 论文第 4.3 节报告两行数据库规模：1 GB 和 8 GB。当前机器是 16 GiB Apple M4；
 在 `k1_comp` 下，预处理数据库存储约为 logical payload 的 `2048*8/3072 = 5.33x`。
 因此 1 GB 主跑可作为默认必跑项，8 GB 行只作为 resource-gated optional run，
-若未运行必须在 JSON 和报告中标记为 `skipped_resource_limit`。
+若未运行必须在 JSON 和报告中标记为 `skipped_resource_limit`；不得
+使用 swap 强行跑、不得外推或伪造 8 GB 实测数据。
+
+论文参考实现在 Ubuntu 22.04 的 Intel Xeon Platinum 8358 2.60 GHz 上，
+使用 GCC 13.3、Intel HEXL/AVX-512 和单线程；报告的 1 GB/8 GB server
+throughput 分别为 1031/1372 MB/s。本分支使用 Apple M4 上的
+x86_64/HEXL/Rosetta 2，所以只对齐协议参数、工作负载定义和统计公式；
+本机数值不得宣称为对论文硬件性能的复现。
+
+论文的 request/response/helper-key 量级分别约为 15 KB / 11 KB /
+1.5 MB。在仓库当前 seed-compressed model 下，本设计将它们固化为
+14,880 / 11,264 / 1,488,000 bytes 的精确 sanity checks，详见“通信统计
+contract”。
 
 ## 非目标
 
@@ -100,8 +117,27 @@ target_plaintexts   = ceil(33,554,430 / 96) = 349,526
 ```
 
 使用当前 `k1_comp` shape policy 和 expansion height 10 时，flat/standard 的
-实际 shape 为 349,696 plaintexts，即 1024.5 MiB logical padded payload。标准
-OnionPIRv2 必须直接复用这一 shape，而不是仅使用另一个“约 1 GB”的近似值。
+实际 shape 如下：
+
+```text
+expansion_height               = 10
+fst_dim_sz                     = 512
+num_other_dims                 = 10
+num_dims                       = 11
+other_dim_sz                   = 683
+rounded_num_pt                 = 512 * 683 = 349,696
+paper_plaintext_database_bytes = 349,526 * 3072
+                               = 1,073,743,872 = 1 GiB + 2,048 bytes
+logical_padded_database_bytes  = 349,696 * 3072
+                               = 1,074,266,112 = 1024.5 MiB
+physical_preprocessed_storage_bytes = 349,696 * 2048 * 8
+                               = 5,729,419,264 = 5.3359375 GiB
+```
+
+`paper_plaintext_database_bytes` 只包含容纳数据所需的 349,526 个
+plaintext；`logical_padded_database_bytes` 还包含 shape rounding；
+`raw_merkle_bytes` 只包含真实 32-byte nodes。标准 OnionPIRv2 必须直接
+复用这一 exact shape，而不是使用另一个“约 1 GB”的近似值。
 
 可选 8 GB 行使用 `2^27` leaves：
 
@@ -109,10 +145,15 @@ OnionPIRv2 必须直接复用这一 shape，而不是仅使用另一个“约 1 
 non_root_node_count = 2^28 - 2 = 268,435,454
 raw_merkle_bytes    = 8 GiB - 64 bytes
 target_plaintexts   = ceil(268,435,454 / 96) = 2,796,203
+paper plaintext     = 2,796,203 * 3072 = 8 GiB + 1,024 bytes
 actual_shape        = 2,796,544 plaintexts = 8193 MiB logical padded payload
+physical storage    = 2,796,544 * 2048 * 8
+                    = 45,818,576,896 bytes = 42.671875 GiB
 ```
 
-这条可选行的预处理 coefficient storage 约为 `8193 MiB * 5.33 = 42.7 GiB`，
+其 reference shape 为 `expansion_height=10`、`fst_dim_sz=512`、
+`num_other_dims=13`、`num_dims=14`。这条可选行的预处理
+coefficient storage 约为 42.7 GiB，
 不得在 16 GiB 机器上作为默认必跑 benchmark。
 
 ## Merkle 索引与布局
@@ -219,6 +260,20 @@ roots/tables。默认 `PirParams()` 仍等价于当前 compile-time standard 配
 `utils::calculate_db_shape` 必须接收显式 `fst_dim_pow2`，不得继续在 helper 内部
 偷偷读取全局 `DBConsts::FST_DIM_POW2`。
 
+实现时必须显式拆除三个当前的 compile-time 阻塞点：
+
+1. `PirParams::PirParams()` 目前从 `DBConsts::DB_SIZE_MB` 计算
+   `target_num_pt`；新 layout path 必须使用调用者给定的精确值；
+2. `PirParams::get_expan_height()` 目前直接返回
+   `DBConsts::TREE_HEIGHT`；必须改为返回 instance field，默认构造再用
+   compile-time value 初始化该 field；
+3. `utils::calculate_db_shape()` 目前直接读取
+   `DBConsts::FST_DIM_POW2`；新 API 必须显式传 policy，旧调用点使用
+   保持现行行为的 wrapper。
+
+仅修改 benchmark 常量而未消除这三个阻塞点，不算 runtime-shape
+实现完成。
+
 ### Layerwise shape planner
 
 flat 和 standard 固定使用 `target_num_pt = 349,526`、`expansion_height = 10` 的
@@ -249,6 +304,26 @@ flat 和 standard 固定使用 `target_num_pt = 349,526`、`expansion_height = 1
 height 0 是合法的单 plaintext 退化 PIR：仍生成一条 encrypted BFV query、
 执行 server path 并返回一条 encrypted response，只是不使用 Galois expansion。
 不得替换为明文直接读取。
+
+对 `H=24` 主工作负载，planner 必须产生以下可固化为单元测试的
+sanity anchors：
+
+```text
+levels 1..6:  target_num_pt=1, expansion_height=0, fst_dim_sz=1
+level 7:      target_num_pt=2, expansion_height=1, fst_dim_sz=2
+level 12:     target_num_pt=43, expansion_height=5, fst_dim_sz=16,
+              num_dims=3, rounded_num_pt=48
+level 24:     target_num_pt=174,763, expansion_height=9, fst_dim_sz=256,
+              num_dims=11, rounded_num_pt=174,848
+
+sum paper_plaintext_database_bytes = 1,073,783,808
+sum logical_padded_database_bytes  = 1,074,843,648
+sum physical_preprocessed_storage_bytes = 5,732,499,456
+```
+
+这些 layerwise totals 是对各层 database 各计一次；在一个完整 path trial
+中每层恰好执行一次 PIR，因此也分别等于该 case 的三个对应
+scan totals（raw application total 另为 1,073,741,760 bytes）。
 
 ## 共享 client session 和 helper keys
 
@@ -402,7 +477,10 @@ online trial:
 
 Merkle 两种模式的一个 trial 是完整 `H`-level path，不是单个 level call。各分项
 在 `H` 次 PIR 上求和。`server_compute_time` 是主要 latency/throughput 分母，以
-保持与现有 OnionPIRv2 `SERVER_TOT_TIME` 口径一致。另报：
+保持与现有 OnionPIRv2 `SERVER_TOT_TIME` 和论文“完整 server
+computation”口径一致：它覆盖 server 从 query 展开、first-dimension
+scan、后续 dimensions 折叠到 modulus switch/response 生成的全部在线计算，
+不只计 first-dimension kernel。另报：
 
 ```text
 local_online_pipeline_time = query + server + serialize + load/decrypt/extract
@@ -410,6 +488,8 @@ local_online_pipeline_time = query + server + serialize + load/decrypt/extract
 
 该值不含真实 network latency，因此不得标记为网络端到端 latency。正确性比较
 在计时区间外执行。warmup trials 执行完整相同流程但不进入平均值。
+论文未给出可直接复用的 warmup/measured 轮次协议，因此 3+5 是本地
+重复性方法，不得宣称为复制了论文的 trial protocol。服务端必须单线程运行。
 
 ## 通信统计 contract
 
@@ -423,6 +503,16 @@ actual_response_bytes       = sum(save_resp_to_stream return values)
 ```
 
 不计算 client secret、本地 RNG state、C++ metadata 或不存在的 public/relin key。
+论文对齐配置下的精确字节推导为：
+
+```text
+seed-compressed BFV query = 32 + 2048 * 58 / 8 = 14,880
+small-q RLWE response     = 2 * 2048 * 22 / 8 = 11,264
+BV Galois keys            = 10 * 8 * 14,880 = 1,190,400
+GSW completion key        = 2 * 10 * 14,880 = 297,600
+shared helper-key bundle  = 1,190,400 + 297,600 = 1,488,000
+```
+
 在 1 GB 主跑、`H = 24`、`k1_comp` 下，通信 sanity check 必须满足：
 
 ```text
@@ -471,25 +561,49 @@ layerwise 的通信量应相同；若不同，benchmark 必须失败并解释实
 
 ## 吞吐量统计 contract
 
-`logical_padded_scan_bytes` 使用每次调用的 `params.get_num_pt() * get_pt_size()`，
-不是 raw Merkle bytes，也不是 NTT physical RAM bytes：
+论文将 server throughput 定义为“plaintext database size in bytes /
+server computation time”。为了与该定义对齐，同时保留 Merkle packing 和
+shape padding 的诊断信息，每个 case 必须同时报三个 scan-byte 口径：
 
 ```text
-standard:
-  logical_padded_scan_bytes = reference_layout_bytes
+paper_plaintext_scan_bytes:
+  standard         = flat_target_num_pt * plaintext_payload_bytes
+  merkle_flat      = H * flat_target_num_pt * plaintext_payload_bytes
+  merkle_layerwise = sum(ceil(2^l / 96) * plaintext_payload_bytes,
+                         l=1..H)
 
-merkle_flat:
-  logical_padded_scan_bytes = H * reference_layout_bytes
+logical_padded_scan_bytes:
+  standard         = reference_num_pt * plaintext_payload_bytes
+  merkle_flat      = H * reference_num_pt * plaintext_payload_bytes
+  merkle_layerwise = sum(level_params.get_num_pt() * plaintext_payload_bytes,
+                         l=1..H)
 
-merkle_layerwise:
-  logical_padded_scan_bytes = sum(level_layout_bytes, l=1..H)
+raw_application_scan_bytes:
+  standard         = flat_target_num_pt * plaintext_payload_bytes
+  merkle_flat      = H * raw_merkle_bytes
+  merkle_layerwise = sum(2^l * node_bytes, l=1..H)
 ```
 
-主要吞吐量：
+`paper_plaintext_scan_bytes` 排除为 PIR shape rounding 额外增加的 plaintexts，但保留
+最后一个 logical plaintext 内的 node-packing padding；它是主要的论文对齐
+分子。`logical_padded_scan_bytes` 是实际 PIR shape 扫描的 logical bytes，
+只用于诊断 padding 影响。`raw_application_scan_bytes` 是真实 Merkle nodes
+在各次 PIR 中被重复扫描的应用层字节数。三者都不是 NTT/composite
+physical RAM bytes。
+
+主要吞吐量和 padding 诊断吞吐量分别为：
 
 ```text
-pir_scan_throughput_MBps = logical_padded_scan_bytes / server_compute_seconds / 2^20
+paper_server_throughput_MBps =
+    paper_plaintext_scan_bytes / server_compute_seconds / 2^20
+
+padded_scan_throughput_MBps =
+    logical_padded_scan_bytes / server_compute_seconds / 2^20
 ```
+
+论文表头使用 `MB/s`；本仓库现有 `DB_SIZE_MB` 和实验工作负载使用
+`2^20` 字节，因此 JSON 中保留 `_MBps` 字段名并明确采用
+`1 MB = 2^20 bytes`。不得用 preprocessed physical storage 作为吞吐量分子。
 
 另报应用有效载荷：
 
@@ -501,9 +615,9 @@ useful_response_bytes = 3072           for standard
 useful_response_throughput_Bps = useful_response_bytes / server_compute_seconds
 ```
 
-同时输出 `raw_dataset_bytes`、`logical_padded_database_bytes` 和
-`physical_preprocessed_storage_bytes`，避免把 packing/padding 或 coefficient
-storage 混为协议吞吐。
+同时输出 `raw_dataset_bytes`、`paper_plaintext_database_bytes`、
+`logical_padded_database_bytes` 和 `physical_preprocessed_storage_bytes`，避免把
+node packing、shape padding 或 coefficient storage 混为协议吞吐。
 
 ## Benchmark 参数与 leaf 序列
 
@@ -562,6 +676,10 @@ JSON 至少包含：
 schema_version
 environment { commit, branch, build_type, config, architecture,
               hexl_enabled, hexl_version, rosetta, non_native_label }
+paper_alignment { paper, revision, sections, poly_degree, log_q, log_t,
+                  log_q_prime, L_KEY, L_EP, L_KS, sigma,
+                  estimated_security_bits, reference_hardware,
+                  local_result_is_hardware_replication }
 workload { leaf_count, tree_height, node_bytes, nodes_per_plaintext,
            paper_row, warmups, measured_trials, trial_leaf_indices,
            optional_workloads[] { leaf_count, tree_height, paper_row,
@@ -571,8 +689,11 @@ cases[] {
   correctness_passed
   pir_call_count
   raw_dataset_bytes
+  paper_plaintext_database_bytes
   logical_padded_database_bytes
+  paper_plaintext_scan_bytes
   logical_padded_scan_bytes
+  raw_application_scan_bytes
   physical_preprocessed_storage_bytes
   setup_ms
   client_query_ms
@@ -585,7 +706,8 @@ cases[] {
   online_total_bytes_mixed
   helper_key_bytes_modeled
   first_session_total_bytes_mixed
-  pir_scan_throughput_MBps
+  paper_server_throughput_MBps
+  padded_scan_throughput_MBps
   useful_response_bytes
   useful_response_throughput_Bps
 }
@@ -627,8 +749,10 @@ BV key switching、matrix multiplication、mod switching 算法不因 baseline �
    bytes；response 保持实际 codec 统计。
 6. **Rosetta 构建漂移为 ARM64**：独立 build dir、双重 arch 设置、`file` hard
    check 和结果 metadata。
-7. **内存压力**：database source 流式生成；三种 cases 顺序构造/销毁；不同时
-   保留 standard、flat 和 layerwise 数据库。
+7. **内存压力**：1 GB row 的 flat preprocessed coefficient storage 已是
+   5.3359375 GiB；database source 流式生成；三种 cases 顺序构造/销毁；
+   不同时保留 standard、flat 和 layerwise 数据库。8 GB row 在预估
+   42.671875 GiB 物理存储不符合内存门限时必须 skip。
 
 ## 验收标准
 
@@ -643,10 +767,11 @@ BV key switching、matrix multiplication、mod switching 算法不因 baseline �
 6. helper-key communication 对每个 Merkle path 只计算一次；
 7. 1 GB 主跑的 3 warmup + 5 measured trials 在同一 x86_64/HEXL/Rosetta build 中完成；
 8. 输出三行 `standard_onionpir`、`merkle_flat`、`merkle_layerwise` 的通信、
-   latency、scan throughput 和 useful throughput；
+   latency、paper-aligned server throughput、padded-scan diagnostic throughput 和
+   useful throughput；
 9. 结构化 artifact 包含完整 workload/build/environment metadata；
 10. 所有最终数字来自通过 correctness gates 的当前 commit；
 11. `git diff --check`、相关单元/集成测试和完整 benchmark command 均成功；
 12. 8 GB 可选行若未运行，最终报告和 JSON 明确给出资源门控 skip reason；
 13. 最终报告明确说明 x86_64/Rosetta 非原生限制、modeled/actual 通信边界和剩余
-    风险。
+    风险，且不将本机结果表述为 Xeon/AVX-512 论文性能的复现。
