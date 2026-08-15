@@ -4,6 +4,41 @@
 void PirTest::test_fst_dim_mult() {
   print_func_name(__FUNCTION__);
   CLEAN_TIMER();
+
+  // Regression oracle for the CONFIG_N2048_K1_COMP scalar first-dimension
+  // kernel. The composite production path calls level_mat_mat_32 with n=512
+  // and 29-bit residues; one output row is enough to expose 64-bit overflow.
+  PirParams composite_params;
+  const auto &composite = composite_params.get_composite_rns();
+  if (composite.enabled) {
+    const size_t diag_n = composite_params.get_fst_dim_sz();
+    const uint64_t diag_q = composite.q1;
+    std::mt19937_64 diag_rng(0x51A1A5ULL);
+    std::vector<uint32_t> diag_a(diag_n);
+    std::vector<uint32_t> diag_b(diag_n * 2);
+    std::vector<uint64_t> diag_got(2, 0);
+    for (auto &x : diag_a) x = static_cast<uint32_t>(diag_rng() % diag_q);
+    for (auto &x : diag_b) x = static_cast<uint32_t>(diag_rng() % diag_q);
+
+    level_mat_mat_32(diag_a.data(), diag_b.data(), diag_got.data(),
+                     1, diag_n, 1, diag_q);
+    uint128_t diag_ref0 = 0;
+    uint128_t diag_ref1 = 0;
+    for (size_t k = 0; k < diag_n; ++k) {
+      diag_ref0 += static_cast<uint128_t>(diag_a[k]) * diag_b[2 * k];
+      diag_ref1 += static_cast<uint128_t>(diag_a[k]) * diag_b[2 * k + 1];
+    }
+    const uint64_t ref0 = static_cast<uint64_t>(diag_ref0 % diag_q);
+    const uint64_t ref1 = static_cast<uint64_t>(diag_ref1 % diag_q);
+    if (diag_got[0] != ref0 || diag_got[1] != ref1) {
+      throw std::runtime_error(
+          "level_mat_mat_32 scalar mismatch: got [" +
+          std::to_string(diag_got[0]) + ", " + std::to_string(diag_got[1]) +
+          "], expected [" + std::to_string(ref0) + ", " +
+          std::to_string(ref1) + "]");
+    }
+  }
+
   // Stress test against a mod-q reference. Inputs are full-width random values
   // in [0, q), and ref_n is large enough that the chunked accumulator must
   // reduce mid-loop. This is the shape that exposed the uint128 overflow at
