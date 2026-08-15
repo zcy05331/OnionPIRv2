@@ -1,5 +1,6 @@
 #pragma once
 
+#include "merkle_baseline.h"
 #include "pir.h"
 
 #include <chrono>
@@ -106,6 +107,18 @@ struct BenchmarkReport {
   std::vector<BenchmarkCaseResult> cases;
 };
 
+using MerklePath = std::vector<MerkleNode>;
+
+struct BenchmarkTrialPlan {
+  std::vector<size_t> warmup_leaf_indices;
+  std::vector<size_t> measured_leaf_indices;
+};
+
+struct BenchmarkCaseExecution {
+  BenchmarkCaseResult result;
+  std::vector<MerklePath> measured_paths;
+};
+
 uint64_t modeled_helper_key_bytes(const PirParams &reference);
 CommunicationStats communication_stats(
     const PirParams &reference, size_t pir_call_count,
@@ -117,3 +130,13 @@ void finalize_case_statistics(BenchmarkCaseResult &result);
 std::string benchmark_report_json(const BenchmarkReport &report);
 void write_benchmark_report_json(const BenchmarkReport &report,
                                  const std::string &path);
+
+BenchmarkCaseExecution run_standard_case(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials);
+BenchmarkCaseExecution run_merkle_flat_case(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials);
+BenchmarkCaseExecution run_merkle_layerwise_case(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials);

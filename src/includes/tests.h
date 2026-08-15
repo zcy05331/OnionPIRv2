@@ -59,6 +59,7 @@ class PirTest {
     void test_server_loader();
     void test_shared_session();
     void test_merkle_benchmark_stats();
+    void test_merkle_integration();
     void test_bv_keyswitch();
     void test_hexl_ntt();
     void test_utils_arith();
