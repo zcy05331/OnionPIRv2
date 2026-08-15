@@ -44,13 +44,7 @@ void PirParams::init_composite_rns() {
 }
 
 PirParams::PirParams()
-    : PirParams(DBConsts::DB_SIZE_MB * 1024 * 1024 /
-                ((DBConsts::PlainMod - 1) * DBConsts::PolyDegree / 8),
-                DBConsts::TREE_HEIGHT) {}
-
-PirParams::PirParams(size_t target_num_pt, size_t expan_height)
     : rns_mod_bits_(DBConsts::RnsMods.begin(), DBConsts::RnsMods.end()) {
-  tree_height_ = expan_height;
   if constexpr (DBConsts::CompositeFirstDim) {
     init_composite_rns();
   } else {
@@ -92,15 +86,15 @@ PirParams::PirParams(size_t target_num_pt, size_t expan_height)
   // num_dims_ counts the first dimension plus recursive expansion dimensions.
   // Expansion capacity is constrained by TREE_HEIGHT and L_EP because each
   // expansion level contributes selector capacity through the data gadget rows.
-  const size_t target_num_pt_ = target_num_pt;
-  DEBUG_PRINT("target_num_pt: " << target_num_pt_);
+  size_t target_num_pt = DBConsts::DB_SIZE_MB * 1024 * 1024 / get_pt_size();
+  DEBUG_PRINT("target_num_pt: " << target_num_pt);
   // Per-dim query slot count is l_ep_ (one BFV per gadget power).
   auto [fst_dim_sz, num_dims] = utils::calculate_db_shape(
-      target_num_pt_, l_ep_, tree_height_, DBConsts::FST_DIM_POW2);
+      target_num_pt, l_ep_, DBConsts::TREE_HEIGHT);
   fst_dim_sz_ = fst_dim_sz;
   num_dims_ = num_dims;
   DEBUG_PRINT("fst_dim_sz: " << fst_dim_sz_ << ", num_dims: " << num_dims_);
-  size_t other_dim_sz = utils::roundup_div(target_num_pt_, fst_dim_sz_);
+  size_t other_dim_sz = utils::roundup_div(target_num_pt, fst_dim_sz_);
   num_pt_ = fst_dim_sz_ * other_dim_sz;
 }
 

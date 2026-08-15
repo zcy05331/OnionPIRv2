@@ -34,7 +34,6 @@ struct CompositeRnsTables {
 class PirParams {
 public:
   PirParams();
-  PirParams(size_t target_num_pt, size_t expan_height = DBConsts::TREE_HEIGHT);
   PirParams(const PirParams &pir_params) = default;
 
   // ================== getters ==================
@@ -75,7 +74,7 @@ public:
   inline const RnsTables &get_rns_tables() const { return rns_tables_; }
   inline const CompositeRnsTables &get_composite_rns() const { return composite_rns_; }
   inline size_t get_poly_degree() const { return DBConsts::PolyDegree; }
-  inline const size_t get_expan_height() const { return tree_height_; }
+  inline const size_t get_expan_height() const { return DBConsts::TREE_HEIGHT; }
   inline size_t get_num_other_dims() const { return num_dims_ - 1; }
 
   // Standard deviation σ of the Gaussian error distribution used during
@@ -110,7 +109,7 @@ public:
 
   void print_params() const;
 
-  private:
+private:
   static constexpr size_t l_ep_ = DBConsts::L_EP;
   static constexpr size_t l_key_ = DBConsts::L_KEY;
   uint64_t small_q_ = 0;
@@ -119,7 +118,6 @@ public:
   size_t num_pt_;
   size_t fst_dim_sz_;
   size_t num_dims_;
-  size_t tree_height_ = DBConsts::TREE_HEIGHT;
   uint64_t plain_mod_ = 0;
   std::vector<size_t> rns_mod_bits_;
   std::vector<uint64_t> rns_mods_;

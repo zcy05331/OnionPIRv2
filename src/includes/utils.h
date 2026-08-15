@@ -264,18 +264,12 @@ void sample_ternary(uint64_t *out, size_t N, uint64_t q, std::mt19937_64 &rng);
 // out_mod/inp_mod round；直接做 unsigned 比例缩放会破坏负噪声语义。
 uint64_t rescale(uint64_t a, uint64_t inp_mod, uint64_t out_mod);
 
-// Given the target number of plaintexts, GSW ell for further dims, and the expansion
-// tree height, calculate the database shape that maximizes the first dimension size
-// under the constraints:
+// Given the target number of plaintexts, GSW ell for further dims, and the expansion tree height,
+// calculate the database shape that maximizes the first dimension size under the constraints:
 // (1) fst_dim_sz + l*(num_dims-1) = 2^h
 // (2) fst_dim_sz * 2^{num_dims-1} >= target_num_pt
 // Returns {fst_dim_sz, num_dims}.
-// If fst_dim_pow2 is true (default), fst_dim_sz is rounded down to the nearest
-// power of two (<= slack). Otherwise slack is used directly.
-std::pair<size_t, size_t> calculate_db_shape(size_t target_num_pt,
-                                            size_t l,
-                                            size_t h,
-                                            bool fst_dim_pow2 = DBConsts::FST_DIM_POW2);
+std::pair<size_t, size_t> calculate_db_shape(size_t target_num_pt, size_t l, size_t h);
 
 // given a number x and a logn, return the bit-reversed number of x
 inline size_t bit_reverse(size_t x, size_t logn) {
