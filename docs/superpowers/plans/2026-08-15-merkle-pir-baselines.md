@@ -4,6 +4,8 @@
 
 **Goal:** Build correctness-gated flat-database and per-layer Merkle-path PIR baselines, then measure them beside standard OnionPIRv2 with paper-aligned v2 parameters on x86_64/HEXL under Rosetta.
 
+**Execution status (2026-08-15):** Implemented and verified through Task 9. The canonical H=24 result is `outputs/merkle_baselines/abaca522bc98-m4-rosetta-v2.json`; H=27 is recorded as `skipped_resource_limit` rather than extrapolated.
+
 **Architecture:** Keep the existing OnionPIRv2 cryptographic pipeline intact while separating runtime database layout from scheme parameters. Add deterministic Merkle packing and database sources around that core, reuse one immutable client helper-key bundle across all layer servers, and run all three cases through one timing/communication collector with JSON output.
 
 **Tech Stack:** C++20, existing OnionPIRv2 RLWE/RGSW/BV code, Intel HEXL 1.2.6, CMake, Python 3/shell launch scripts, manual JSON serialization without new dependencies.

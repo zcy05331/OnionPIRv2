@@ -100,6 +100,24 @@ Query and helper-key byte counts are modeled seed-compressed sizes; response
 bytes are measured from the repository's serializer, so totals ending in
 `_mixed` are intentionally not described as fully measured wire traffic.
 
+The canonical H=24 run from commit `abaca522bc98` used 3 warmups and 5 measured
+trials. Full metadata and per-stage timings are in
+`outputs/merkle_baselines/abaca522bc98-m4-rosetta-v2.json` (SHA-256
+`ffbfbeb39ec1905120e102bc4ce5f5153ea1a6a8ad6c697f612098a8ff167269`).
+
+| Case | Avg. server time | Paper-aligned throughput | Modeled queries | Actual responses | Online mixed | Shared helper keys | First session mixed |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `standard_onionpir` | 1,373.953 ms | 745.296 MiB/s | 14,880 B | 11,264 B | 26,144 B | 1,488,000 B | 1,514,144 B |
+| `merkle_flat` | 34,840.405 ms | 705.389 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
+| `merkle_layerwise` | 2,009.910 ms | 509.496 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
+
+The optional H=27 row was not extrapolated: its estimated peak allocation was
+45,822,181,376 bytes, so the 17,179,869,184-byte host recorded
+`skipped_resource_limit` after applying the fixed 2 GiB safety margin. All 392
+decryptions across warmup and measured calls passed; the logged residual noise
+budget ranged from 1 to 3 bits, so the H=24 result is correct but has a narrow
+minimum noise margin.
+
 **Available configs:** `k1`, `k1_comp` (default, composite-mod K=1), `k2_mp`, `n4096_k2_mp`. See `src/includes/database_constants.h` for per-config parameters.
 
 **Available tests:** `pir` (default), `bfv`, `ext_prod`, `ext_prod_mux`, `fst_dim`, `fast_expand`, `decrypt_mod_q`, `mod_switch`, `db_shape`, `bv_ks`, `cpu_info`, `hexl_ntt`, `utils_arith`, `noise_sampling`, `rlwe_enc`, `barrett`, `plan_params`

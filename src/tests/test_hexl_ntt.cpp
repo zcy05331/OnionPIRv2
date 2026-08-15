@@ -160,4 +160,5 @@ void PirTest::test_hexl_ntt() {
   BENCH_PRINT("\n--- Summary ---");
   int pass = match + mult_ok + add_ok + (m_recovered == m) + wrap_match;
   BENCH_PRINT("Passed " << pass << "/5 correctness tests (Test 6 is perf-only)");
+  require_test(pass == 5, "HEXL correctness suite did not pass 5/5 checks");
 }
