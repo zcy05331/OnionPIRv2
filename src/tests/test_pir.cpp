@@ -92,6 +92,9 @@ void PirTest::test_pir() {
   double avg_server_time = GET_AVG_TIME(SERVER_TOT_TIME);
   double throughput = pir_params.get_DBSize_MB() / (avg_server_time / 1000);
 
+  require_test(success_count == num_experiments,
+               "standard OnionPIR correctness mismatch");
+
   // ============= PRINTING FINAL RESULTS ===============]
   PRINT_BAR;
   BENCH_PRINT("                                FINAL RESULTS")

@@ -14,6 +14,13 @@
 #include <cassert>
 #include <iostream>
 #include <bitset>
+#include <stdexcept>
+
+inline void require_test(bool condition, const std::string &message) {
+  if (!condition) {
+    throw std::runtime_error(message);
+  }
+}
 
 inline void print_throughput(const std::string &name, const size_t db_size) {
   double avg_time = GET_AVG_TIME(name);

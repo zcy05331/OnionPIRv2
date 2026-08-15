@@ -21,11 +21,6 @@ void PirTest::run_test(const std::string &test_name) {
   else if (test_name == "barrett")           test_barrett();
   else if (test_name == "plan_params")       plan_params();
   else {
-    std::cerr << "Unknown test: " << test_name << std::endl;
-    std::cerr << "Available tests: pir, bfv, ext_prod, ext_prod_mux, "
-              << "fst_dim, fast_expand, decrypt_mod_q, "
-              << "mod_switch, db_shape, hexl_ntt, utils_arith, "
-              << "noise_sampling, rlwe_enc, cpu_info, bv_ks, "
-              << "plan_params" << std::endl;
+    throw std::invalid_argument("Unknown test: " + test_name);
   }
 }
