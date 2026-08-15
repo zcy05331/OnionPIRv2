@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "matrix.h"
 #include "hexl/hexl.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -47,23 +48,50 @@ PirServer::PirServer(const PirParams &pir_params)
 PirServer::~PirServer() {
 }
 
-// Fills the database with random data.
+// Preserve the original random database API, but make it use the same
+// validated preprocessing path as deterministic benchmark inputs.
+void PirServer::gen_data(const std::vector<size_t>& record_indices) {
+  BENCH_PRINT("Generating random data for the server database...");
+  std::mt19937_64 rng(std::random_device{}());
+  const uint64_t plain_mod = pir_params_.get_plain_mod();
+  const size_t coeff_count = pir_params_.get_poly_degree();
+  PlaintextSource random_source =
+      [&rng, plain_mod, coeff_count](size_t, RlwePt &out) {
+        out.data.resize(coeff_count);
+        for (uint64_t &coefficient : out.data) {
+          coefficient = rng() % plain_mod;
+        }
+      };
+  load_data(num_pt_, random_source, record_indices);
+}
+
 // Offline DB preprocessing 对应 2025 Algorithm 4 的 A 矩阵准备：每个 plaintext
 // polynomial 先变成 NTT form，然后从 plaintext-major [pt][coeff] 转成
 // coefficient-major [limb/NTT coefficient][pt]。这样在固定 (limb, NTT
 // coefficient) 下，所有 DB entries 按 first dimension 连续存放，首维 kernel
 // 做 linear scan 时 A[row][k] 是顺序访问。
-// Streams plaintexts in tiles: for each tile we generate random coefficients,
-// record any tagged for verification, NTT under each q_k, and transpose-scatter
+// Streams plaintexts in tiles: for each tile the callback generates logical
+// plaintexts and the loader zeroes rounded shape padding. It records tagged
+// entries for verification, applies NTT under each q_k, and transpose-scatters
 // into coefficient-major DB buffers — standard path writes db_aligned_, while
-// composite path writes db_lo_/db_hi_. Then drop the tile buffer. tile staging
+// composite path writes db_lo_/db_hi_. Then it drops the tile buffer. Tile staging
 // 只保留少量 pre-NTT plaintexts，避免同时持有整份 pre-NTT DB 和重排后的 DB。
 // record_indices: indices of plaintexts to save (pre-NTT) for test verification.
-void PirServer::gen_data(const std::vector<size_t>& record_indices) {
-  BENCH_PRINT("Generating random data for the server database...");
-
-  // Seed a fast PRNG with OS entropy (avoids per-coefficient syscall overhead of /dev/urandom)
-  std::mt19937_64 rng(std::random_device{}());
+void PirServer::load_data(size_t logical_num_pt, const PlaintextSource &source,
+                          const std::vector<size_t>& record_indices) {
+  if (!source) {
+    throw std::invalid_argument("PirServer::load_data requires a source");
+  }
+  if (logical_num_pt > num_pt_) {
+    throw std::invalid_argument(
+        "PirServer::load_data logical plaintext count exceeds its layout");
+  }
+  for (size_t index : record_indices) {
+    if (index >= num_pt_) {
+      throw std::invalid_argument(
+          "PirServer::load_data record index exceeds its layout");
+    }
+  }
 
   recorded_pts_.clear();
   recorded_pts_.reserve(record_indices.size());
@@ -90,11 +118,28 @@ void PirServer::gen_data(const std::vector<size_t>& record_indices) {
   for (size_t pb = 0; pb < num_pt_; pb += TILE) {
     const size_t bs = std::min(TILE, num_pt_ - pb);
 
-    // Pass 1 (per tile): random fill + record tagged entries.
+    // Pass 1 (per tile): source fill or shape-padding zero, then record tagged
+    // entries before any NTT transformation.
     for (size_t p = 0; p < bs; ++p) {
       uint64_t *dst = tile_pt.data() + p * coeff_count;
-      for (size_t i = 0; i < coeff_count; ++i) dst[i] = rng() % plain_mod;
       const size_t poly_id = pb + p;
+      if (poly_id < logical_num_pt) {
+        RlwePt plaintext;
+        source(poly_id, plaintext);
+        if (plaintext.data.size() != coeff_count) {
+          throw std::invalid_argument(
+              "Plaintext source returned the wrong coefficient count");
+        }
+        for (size_t i = 0; i < coeff_count; ++i) {
+          if (plaintext.data[i] >= plain_mod) {
+            throw std::invalid_argument(
+                "Plaintext source coefficient exceeds the plaintext modulus");
+          }
+          dst[i] = plaintext.data[i];
+        }
+      } else {
+        std::fill(dst, dst + coeff_count, 0);
+      }
       if (record_set.count(poly_id)) {
         RlwePt pt;
         pt.data.assign(dst, dst + coeff_count);
@@ -772,7 +817,8 @@ void PirServer::set_client_gsw_key(const size_t client_id, GSWCt gsw_key) {
 RlwePt PirServer::direct_get_original_plaintext(const size_t plaintext_idx) const {
   auto it = recorded_pts_.find(plaintext_idx);
   if (it == recorded_pts_.end()) {
-    throw std::invalid_argument("Plaintext index " + std::to_string(plaintext_idx) + " was not recorded during gen_data()");
+    throw std::invalid_argument("Plaintext index " + std::to_string(plaintext_idx) +
+                                " was not recorded during database loading");
   }
   return it->second;
 }
@@ -980,8 +1026,6 @@ void PirServer::mod_switch_inplace(RlweCt &ciphertext, const uint64_t q) {
     ciphertext.c1.resize(coeff_count);
   }
 }
-
-
 
 
 

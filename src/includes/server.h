@@ -4,9 +4,12 @@
 #include "pir.h"
 #include "bv_keyswitch.h"
 #include "aligned_allocator.h"
+#include <functional>
 #include <map>
 #include <sstream>
 #include <unordered_map>
+
+using PlaintextSource = std::function<void(size_t logical_index, RlwePt &out)>;
 
 class PirServer {
 public:
@@ -18,6 +21,11 @@ public:
    * It pushes the data to the database in chunks.
    */
   void gen_data(const std::vector<size_t>& record_indices = {});
+
+  // Stream logical plaintexts through the existing NTT/transpose database
+  // preprocessing path. The rounded tail [logical_num_pt, num_pt_) is zero.
+  void load_data(size_t logical_num_pt, const PlaintextSource &source,
+                 const std::vector<size_t> &record_indices = {});
 
   // 服务端侧的 Algorithm 4 executable skeleton。输入是 QueryPack 生成的
   // full-q BFV packed query；输出是一条 coefficient-form ciphertext，已经完成
