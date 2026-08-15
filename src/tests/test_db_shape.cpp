@@ -6,4 +6,7 @@ void PirTest::test_db_shape() {
   BENCH_PRINT("fst_dim_sz: " << fst1 << ", num_dims: " << nd1);
   auto [fst2, nd2] = utils::calculate_db_shape(1000000, 6, 8);
   BENCH_PRINT("fst_dim_sz: " << fst2 << ", num_dims: " << nd2);
+
+  auto [fst3, nd3] = utils::calculate_db_shape(1000000, 6, 8, false);
+  BENCH_PRINT("fst_dim_sz(no pow2): " << fst3 << ", num_dims: " << nd3);
 }
