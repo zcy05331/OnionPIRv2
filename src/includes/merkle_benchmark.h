@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,15 @@ struct CommunicationStats {
   uint64_t first_session_total_bytes_mixed = 0;
 };
 
+struct MetricSampleStatistics {
+  uint64_t count = 0;
+  double mean = 0.0;
+  double population_variance = 0.0;
+  double population_standard_deviation = 0.0;
+  std::optional<double> sample_variance;
+  std::optional<double> sample_standard_deviation;
+};
+
 struct BenchmarkCaseResult {
   std::string name;
   bool correctness_passed = false;
@@ -51,9 +61,16 @@ struct BenchmarkCaseResult {
   uint64_t physical_preprocessed_storage_bytes = 0;
   TrialTiming timing;
   CommunicationStats communication;
+  // Raw measured samples make means and variance independently auditable.
+  // Warm-up trials are intentionally excluded from both vectors.
+  std::vector<double> server_compute_samples_ms;
+  std::optional<MetricSampleStatistics> server_compute_ms_statistics;
   // Paper definition: plaintext database bytes / full-case server time. For a
   // Merkle case, full-case time retrieves the complete H-node path.
   double paper_server_throughput_MBps = 0.0;
+  std::vector<double> paper_server_throughput_samples_MBps;
+  std::optional<MetricSampleStatistics>
+      paper_server_throughput_MBps_statistics;
   // Diagnostics below charge every repeated database pass. They explain
   // kernel efficiency but are not end-to-end Merkle throughput. All _MBps
   // fields use the repository convention 1 MB = 2^20 bytes (MiB/s).
@@ -144,6 +161,7 @@ struct BenchmarkCaseExecution {
 enum class BenchmarkCaseSelection {
   all,
   standard_onionpir,
+  merkle_paths,
 };
 
 struct MerkleBenchmarkOptions {
@@ -166,6 +184,8 @@ CommunicationStats communication_stats(
     const std::vector<size_t> &actual_response_bytes);
 void validate_matching_path_communication(const CommunicationStats &flat,
                                           const CommunicationStats &layerwise);
+MetricSampleStatistics summarize_metric_samples(
+    const std::vector<double> &samples);
 void finalize_case_statistics(BenchmarkCaseResult &result);
 
 std::string benchmark_report_json(const BenchmarkReport &report);

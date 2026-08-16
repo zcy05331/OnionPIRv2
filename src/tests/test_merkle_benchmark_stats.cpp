@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -28,6 +29,19 @@ void PirTest::test_merkle_benchmark_stats() {
   }
   require_test(rejected_too_many_distinct_queries,
                "trial planner accepted more queries than leaves");
+
+  const MetricSampleStatistics basic_statistics =
+      summarize_metric_samples({1.0, 2.0, 3.0, 4.0});
+  require_test(basic_statistics.count == 4, "sample count");
+  require_test(std::abs(basic_statistics.mean - 2.5) < 1e-12,
+               "sample mean");
+  require_test(
+      std::abs(basic_statistics.population_variance - 1.25) < 1e-12,
+      "population variance");
+  require_test(basic_statistics.sample_variance.has_value() &&
+                   std::abs(*basic_statistics.sample_variance -
+                            (5.0 / 3.0)) < 1e-12,
+               "sample variance");
 
   PirParams reference = PirParams().with_layout({349526, 10, true});
   // Freeze v2 seed-compressed request/helper models independently of the
@@ -82,10 +96,18 @@ void PirTest::test_merkle_benchmark_stats() {
   result.timing.server_compute = std::chrono::milliseconds(250);
   result.timing.response_serialize = std::chrono::milliseconds(2);
   result.timing.response_load_decrypt_extract = std::chrono::milliseconds(3);
+  result.server_compute_samples_ms = {200.0, 250.0, 300.0};
   finalize_case_statistics(result);
   require_test(result.paper_server_throughput_MBps > 4095.0 &&
                    result.paper_server_throughput_MBps < 4097.0,
                "paper throughput used repeated scan bytes as database size");
+  require_test(result.server_compute_ms_statistics.has_value() &&
+                   result.server_compute_ms_statistics->count == 3,
+               "server sample statistics missing");
+  require_test(
+      result.paper_server_throughput_MBps_statistics.has_value() &&
+          result.paper_server_throughput_samples_MBps.size() == 3,
+      "throughput sample statistics missing");
   // JSON must keep the primary and scan metrics distinct and preserve bytes.
   BenchmarkReport report;
   report.schema_version = "onionpir-merkle-baselines-v2";
@@ -120,6 +142,14 @@ void PirTest::test_merkle_benchmark_stats() {
                    "\"paper_scan_throughput_MBps\": 98304.187500") !=
                    std::string::npos,
                "JSON omitted the repeated-scan diagnostic throughput");
+  require_test(contents.str().find(
+                   "\"server_compute_samples_ms\": [200.000000, "
+                   "250.000000, 300.000000]") != std::string::npos,
+               "JSON omitted server-time samples");
+  require_test(contents.str().find(
+                   "\"population_variance\": 1666.666667") !=
+                   std::string::npos,
+               "JSON omitted server-time variance");
   require_test(contents.str().find(
                    "\"warmup_leaf_indices\": [1, 2, 3]") !=
                    std::string::npos,
@@ -163,6 +193,16 @@ void PirTest::test_merkle_benchmark_stats() {
   require_test(standard_only_report.cases.front().name ==
                    "standard_onionpir",
                "standard-only benchmark omitted the requested case");
+
+  MerkleBenchmarkOptions paths_only_options = standard_only_options;
+  paths_only_options.case_selection = BenchmarkCaseSelection::merkle_paths;
+  const BenchmarkReport paths_only_report =
+      run_merkle_benchmark_suite(paths_only_options);
+  require_test(paths_only_report.cases.size() == 2,
+               "paths-only benchmark executed the wrong case count");
+  require_test(paths_only_report.cases[0].name == "merkle_flat" &&
+                   paths_only_report.cases[1].name == "merkle_layerwise",
+               "paths-only benchmark did not isolate both path cases");
 
   bool rejected_ungated_large_primary = false;
   try {

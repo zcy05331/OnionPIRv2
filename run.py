@@ -85,7 +85,8 @@ def main():
         help="Write structured Merkle benchmark JSON to FILE",
     )
     parser.add_argument(
-        "--benchmark-case", choices=("all", "standard_onionpir"),
+        "--benchmark-case",
+        choices=("all", "standard_onionpir", "merkle_paths"),
         default="all",
         help="Merkle benchmark case to run (default: all)",
     )

@@ -92,6 +92,45 @@ void write_integer_array(std::ostringstream &out,
   out << ']';
 }
 
+void write_double_array(std::ostringstream &out,
+                        const std::vector<double> &values) {
+  out << '[';
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i != 0) out << ", ";
+    out << values[i];
+  }
+  out << ']';
+}
+
+void write_optional_double(std::ostringstream &out,
+                           const std::optional<double> &value) {
+  if (value.has_value()) {
+    out << *value;
+  } else {
+    out << "null";
+  }
+}
+
+void write_metric_statistics(
+    std::ostringstream &out,
+    const std::optional<MetricSampleStatistics> &statistics) {
+  if (!statistics.has_value()) {
+    out << "null";
+    return;
+  }
+  out << "{\"count\": " << statistics->count
+      << ", \"mean\": " << statistics->mean
+      << ", \"population_variance\": "
+      << statistics->population_variance
+      << ", \"sample_variance\": ";
+  write_optional_double(out, statistics->sample_variance);
+  out << ", \"population_standard_deviation\": "
+      << statistics->population_standard_deviation
+      << ", \"sample_standard_deviation\": ";
+  write_optional_double(out, statistics->sample_standard_deviation);
+  out << '}';
+}
+
 }  // namespace
 
 BenchmarkDuration TrialTiming::local_online_pipeline() const {
@@ -166,6 +205,44 @@ void validate_matching_path_communication(const CommunicationStats &flat,
   }
 }
 
+MetricSampleStatistics summarize_metric_samples(
+    const std::vector<double> &samples) {
+  if (samples.empty()) {
+    throw std::invalid_argument("Cannot summarize zero metric samples");
+  }
+
+  // Welford's online update avoids the cancellation in E[x^2] - E[x]^2.
+  long double mean = 0.0L;
+  long double squared_deviation_sum = 0.0L;
+  uint64_t count = 0;
+  for (double sample : samples) {
+    if (!std::isfinite(sample)) {
+      throw std::invalid_argument("Metric samples must be finite");
+    }
+    ++count;
+    const long double delta = static_cast<long double>(sample) - mean;
+    mean += delta / static_cast<long double>(count);
+    const long double adjusted_delta =
+        static_cast<long double>(sample) - mean;
+    squared_deviation_sum += delta * adjusted_delta;
+  }
+
+  MetricSampleStatistics result;
+  result.count = count;
+  result.mean = static_cast<double>(mean);
+  result.population_variance = static_cast<double>(
+      squared_deviation_sum / static_cast<long double>(count));
+  result.population_standard_deviation =
+      std::sqrt(result.population_variance);
+  if (count > 1) {
+    result.sample_variance = static_cast<double>(
+        squared_deviation_sum / static_cast<long double>(count - 1));
+    result.sample_standard_deviation =
+        std::sqrt(*result.sample_variance);
+  }
+  return result;
+}
+
 void finalize_case_statistics(BenchmarkCaseResult &result) {
   if (!result.correctness_passed) {
     throw std::invalid_argument(
@@ -192,6 +269,26 @@ void finalize_case_statistics(BenchmarkCaseResult &result) {
       server_seconds / bytes_per_mebibyte;
   result.useful_response_throughput_Bps =
       static_cast<double>(result.useful_response_bytes) / server_seconds;
+
+  if (!result.server_compute_samples_ms.empty()) {
+    result.server_compute_ms_statistics =
+        summarize_metric_samples(result.server_compute_samples_ms);
+    result.paper_server_throughput_samples_MBps.clear();
+    result.paper_server_throughput_samples_MBps.reserve(
+        result.server_compute_samples_ms.size());
+    for (double server_ms : result.server_compute_samples_ms) {
+      if (!(server_ms > 0.0) || !std::isfinite(server_ms)) {
+        throw std::invalid_argument(
+            "Server compute samples must be finite positive durations");
+      }
+      result.paper_server_throughput_samples_MBps.push_back(
+          static_cast<double>(result.paper_plaintext_database_bytes) /
+          (server_ms / 1000.0) / bytes_per_mebibyte);
+    }
+    result.paper_server_throughput_MBps_statistics =
+        summarize_metric_samples(
+            result.paper_server_throughput_samples_MBps);
+  }
 }
 
 std::string benchmark_report_json(const BenchmarkReport &report) {
@@ -315,9 +412,13 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
         << ",\n      \"setup_ms\": " << milliseconds(result.timing.setup)
         << ",\n      \"client_query_ms\": "
         << milliseconds(result.timing.client_query)
-        << ",\n      \"server_compute_ms\": "
-        << milliseconds(result.timing.server_compute)
-        << ",\n      \"response_serialize_ms\": "
+      << ",\n      \"server_compute_ms\": "
+      << milliseconds(result.timing.server_compute)
+      << ",\n      \"server_compute_samples_ms\": ";
+    write_double_array(out, result.server_compute_samples_ms);
+    out << ",\n      \"server_compute_ms_statistics\": ";
+    write_metric_statistics(out, result.server_compute_ms_statistics);
+    out << ",\n      \"response_serialize_ms\": "
         << milliseconds(result.timing.response_serialize)
         << ",\n      \"response_load_decrypt_extract_ms\": "
         << milliseconds(result.timing.response_load_decrypt_extract)
@@ -335,7 +436,13 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
         << communication.first_session_total_bytes_mixed
         << ",\n      \"paper_server_throughput_MBps\": "
         << result.paper_server_throughput_MBps
-        << ",\n      \"paper_scan_throughput_MBps\": "
+        << ",\n      \"paper_server_throughput_samples_MBps\": ";
+    write_double_array(out,
+                       result.paper_server_throughput_samples_MBps);
+    out << ",\n      \"paper_server_throughput_MBps_statistics\": ";
+    write_metric_statistics(
+        out, result.paper_server_throughput_MBps_statistics);
+    out << ",\n      \"paper_scan_throughput_MBps\": "
         << result.paper_scan_throughput_MBps
         << ",\n      \"padded_scan_throughput_MBps\": "
         << result.padded_scan_throughput_MBps
@@ -557,9 +664,13 @@ BenchmarkCaseExecution run_standard_case(
 
   TrialTiming timing_total;
   std::vector<size_t> response_shape;
+  std::vector<double> server_compute_samples_ms;
+  server_compute_samples_ms.reserve(trials.measured_leaf_indices.size());
   for (size_t leaf : trials.measured_leaf_indices) {
     PirCallOutput output = run_trial(leaf);
     add_online_timing(timing_total, output.timing);
+    server_compute_samples_ms.push_back(
+        milliseconds(output.timing.server_compute));
     const std::vector<size_t> current_shape{output.response_bytes};
     if (response_shape.empty()) {
       response_shape = current_shape;
@@ -584,6 +695,8 @@ BenchmarkCaseExecution run_standard_case(
       timing_total, trials.measured_leaf_indices.size());
   result.timing.setup = setup_time;
   result.communication = communication_stats(reference, 1, response_shape);
+  result.server_compute_samples_ms =
+      std::move(server_compute_samples_ms);
   finalize_case_statistics(result);
   return execution;
 }
@@ -641,6 +754,8 @@ BenchmarkCaseExecution run_merkle_flat_case(
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
     add_online_timing(timing_total, trial.timing);
+    execution.result.server_compute_samples_ms.push_back(
+        milliseconds(trial.timing.server_compute));
     if (response_shape.empty()) {
       response_shape = trial.response_bytes;
     } else {
@@ -743,6 +858,8 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
     add_online_timing(timing_total, trial.timing);
+    execution.result.server_compute_samples_ms.push_back(
+        milliseconds(trial.timing.server_compute));
     if (response_shape.empty()) {
       response_shape = trial.response_bytes;
     } else {
@@ -849,17 +966,23 @@ std::vector<BenchmarkCaseResult> execute_case_set(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials, BenchmarkCaseSelection selection,
     const std::string &name_suffix = "") {
-  BenchmarkCaseExecution standard =
-      run_standard_case(workload, reference, trials);
-  standard.result.name += name_suffix;
-
-  // Return before constructing either Merkle-path database. This makes a
-  // Standard-only repetition independent of the flat/layerwise setup costs.
-  if (selection == BenchmarkCaseSelection::standard_onionpir) {
-    return {std::move(standard.result)};
-  }
-  if (selection != BenchmarkCaseSelection::all) {
+  if (selection != BenchmarkCaseSelection::all &&
+      selection != BenchmarkCaseSelection::standard_onionpir &&
+      selection != BenchmarkCaseSelection::merkle_paths) {
     throw std::invalid_argument("Unknown benchmark case selection");
+  }
+
+  std::vector<BenchmarkCaseResult> results;
+  if (selection != BenchmarkCaseSelection::merkle_paths) {
+    BenchmarkCaseExecution standard =
+        run_standard_case(workload, reference, trials);
+    standard.result.name += name_suffix;
+    results.push_back(std::move(standard.result));
+    // Return before constructing either Merkle-path database. This keeps a
+    // Standard-only repetition independent of path setup costs.
+    if (selection == BenchmarkCaseSelection::standard_onionpir) {
+      return results;
+    }
   }
 
   BenchmarkCaseExecution flat =
@@ -874,8 +997,9 @@ std::vector<BenchmarkCaseResult> execute_case_set(
   }
   flat.result.name += name_suffix;
   layerwise.result.name += name_suffix;
-  return {std::move(standard.result), std::move(flat.result),
-          std::move(layerwise.result)};
+  results.push_back(std::move(flat.result));
+  results.push_back(std::move(layerwise.result));
+  return results;
 }
 
 uint64_t detected_physical_memory_bytes() {

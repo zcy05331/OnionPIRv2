@@ -94,9 +94,12 @@ int main(int argc, char *argv[]) {
           benchmark_case = BenchmarkCaseSelection::all;
         } else if (value == "standard_onionpir") {
           benchmark_case = BenchmarkCaseSelection::standard_onionpir;
+        } else if (value == "merkle_paths") {
+          benchmark_case = BenchmarkCaseSelection::merkle_paths;
         } else {
           throw std::invalid_argument(
-              "--benchmark-case must be all or standard_onionpir");
+              "--benchmark-case must be all, standard_onionpir, or "
+              "merkle_paths");
         }
       } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
         run_optional_8gb = true;
