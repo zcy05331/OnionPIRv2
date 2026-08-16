@@ -268,7 +268,9 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
   out << ",\n    \"warmups\": " << workload.warmups
       << ",\n    \"measured_trials\": " << workload.measured_trials
       << ",\n    \"trial_seed\": " << workload.trial_seed
-      << ",\n    \"trial_leaf_indices\": ";
+      << ",\n    \"warmup_leaf_indices\": ";
+  write_integer_array(out, workload.warmup_leaf_indices);
+  out << ",\n    \"trial_leaf_indices\": ";
   write_integer_array(out, workload.trial_leaf_indices);
   out << ",\n    \"optional_workloads\": [";
   for (size_t i = 0; i < workload.optional_workloads.size(); ++i) {
@@ -843,28 +845,6 @@ PirParams make_benchmark_reference(const MerkleWorkload &workload) {
   throw std::runtime_error("No v2 reference layout for benchmark workload");
 }
 
-BenchmarkTrialPlan make_trial_plan(const MerkleWorkload &workload,
-                                   size_t warmups, size_t measured,
-                                   uint64_t seed) {
-  if (measured == 0) {
-    throw std::invalid_argument(
-        "Merkle benchmark requires at least one measured trial");
-  }
-  BenchmarkTrialPlan plan;
-  plan.warmup_leaf_indices.reserve(warmups);
-  plan.measured_leaf_indices.reserve(measured);
-  uint64_t state = seed;
-  for (size_t i = 0; i < warmups; ++i) {
-    plan.warmup_leaf_indices.push_back(
-        splitmix64_next(state) % workload.leaf_count);
-  }
-  for (size_t i = 0; i < measured; ++i) {
-    plan.measured_leaf_indices.push_back(
-        splitmix64_next(state) % workload.leaf_count);
-  }
-  return plan;
-}
-
 std::vector<BenchmarkCaseResult> execute_case_set(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials, const std::string &name_suffix = "") {
@@ -931,6 +911,47 @@ void append_case_set(std::vector<BenchmarkCaseResult> &destination,
 
 }  // namespace
 
+BenchmarkTrialPlan make_benchmark_trial_plan(size_t leaf_count, size_t warmups,
+                                             size_t measured, uint64_t seed) {
+  if (leaf_count == 0) {
+    throw std::invalid_argument(
+        "Merkle benchmark requires at least one query ID");
+  }
+  if (measured == 0) {
+    throw std::invalid_argument(
+        "Merkle benchmark requires at least one measured trial");
+  }
+  if (warmups > leaf_count || measured > leaf_count - warmups) {
+    throw std::invalid_argument(
+        "Merkle benchmark requires distinct query IDs for every trial");
+  }
+
+  const size_t query_count = warmups + measured;
+  std::vector<size_t> selected;
+  selected.reserve(query_count);
+  uint64_t state = seed;
+
+  // Floyd's algorithm samples without replacement in O(query_count^2) space
+  // independent of the database size. query_count is only 8 in the frozen
+  // benchmark, so the linear membership check is both bounded and explicit.
+  for (size_t offset = 0; offset < query_count; ++offset) {
+    const size_t upper = leaf_count - query_count + offset;
+    const size_t candidate =
+        static_cast<size_t>(splitmix64_next(state) % (upper + 1));
+    selected.push_back(std::find(selected.begin(), selected.end(), candidate) ==
+                               selected.end()
+                           ? candidate
+                           : upper);
+  }
+
+  BenchmarkTrialPlan plan;
+  plan.warmup_leaf_indices.assign(selected.begin(),
+                                  selected.begin() + warmups);
+  plan.measured_leaf_indices.assign(selected.begin() + warmups,
+                                    selected.end());
+  return plan;
+}
+
 uint64_t estimate_merkle_benchmark_peak_bytes(size_t leaf_count) {
   const MerkleWorkload workload = make_benchmark_workload(leaf_count);
   const PirParams reference = make_benchmark_reference(workload);
@@ -956,8 +977,8 @@ BenchmarkReport run_merkle_benchmark_suite(
   const MerkleWorkload workload =
       make_benchmark_workload(options.leaf_count);
   const PirParams reference = make_benchmark_reference(workload);
-  const BenchmarkTrialPlan trials = make_trial_plan(
-      workload, options.warmups, options.measured_trials,
+  const BenchmarkTrialPlan trials = make_benchmark_trial_plan(
+      workload.leaf_count, options.warmups, options.measured_trials,
       options.trial_seed);
 
   BenchmarkReport report;
@@ -1021,6 +1042,8 @@ BenchmarkReport run_merkle_benchmark_suite(
   report.workload.warmups = options.warmups;
   report.workload.measured_trials = options.measured_trials;
   report.workload.trial_seed = options.trial_seed;
+  report.workload.warmup_leaf_indices.assign(
+      trials.warmup_leaf_indices.begin(), trials.warmup_leaf_indices.end());
   report.workload.trial_leaf_indices.assign(
       trials.measured_leaf_indices.begin(), trials.measured_leaf_indices.end());
 
@@ -1055,8 +1078,9 @@ BenchmarkReport run_merkle_benchmark_suite(
           make_benchmark_workload(optional.leaf_count);
       const PirParams optional_reference =
           make_benchmark_reference(optional_workload);
-      const BenchmarkTrialPlan optional_trials = make_trial_plan(
-          optional_workload, options.warmups, options.measured_trials,
+      const BenchmarkTrialPlan optional_trials = make_benchmark_trial_plan(
+          optional_workload.leaf_count, options.warmups,
+          options.measured_trials,
           options.trial_seed ^ 0x8b47424950524952ULL);
       append_case_set(
           report.cases,

@@ -1,11 +1,34 @@
 #include "tests.h"
 #include "merkle_benchmark.h"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <sstream>
 
 void PirTest::test_merkle_benchmark_stats() {
+  BenchmarkTrialPlan distinct_queries =
+      make_benchmark_trial_plan(8, 3, 5, 0x123456789abcdef0ULL);
+  std::vector<size_t> all_query_ids = distinct_queries.warmup_leaf_indices;
+  all_query_ids.insert(all_query_ids.end(),
+                       distinct_queries.measured_leaf_indices.begin(),
+                       distinct_queries.measured_leaf_indices.end());
+  std::sort(all_query_ids.begin(), all_query_ids.end());
+  require_test(all_query_ids.size() == 8,
+               "trial planner omitted query IDs");
+  require_test(std::adjacent_find(all_query_ids.begin(), all_query_ids.end()) ==
+                   all_query_ids.end(),
+               "trial planner repeated a query ID");
+
+  bool rejected_too_many_distinct_queries = false;
+  try {
+    (void)make_benchmark_trial_plan(4, 2, 3, 7);
+  } catch (const std::invalid_argument &) {
+    rejected_too_many_distinct_queries = true;
+  }
+  require_test(rejected_too_many_distinct_queries,
+               "trial planner accepted more queries than leaves");
+
   PirParams reference = PirParams().with_layout({349526, 10, true});
   // Freeze v2 seed-compressed request/helper models independently of the
   // response serializer, whose byte count is measured at runtime.
@@ -76,6 +99,8 @@ void PirTest::test_merkle_benchmark_stats() {
   report.workload.tree_height = 24;
   report.workload.node_bytes = 32;
   report.workload.nodes_per_plaintext = 96;
+  report.workload.warmup_leaf_indices = {1, 2, 3};
+  report.workload.trial_leaf_indices = {4, 5, 6, 7, 8};
   report.cases.push_back(result);
 
   const std::string path_name = "/tmp/onionpir-benchmark-stats-test.json";
@@ -95,6 +120,14 @@ void PirTest::test_merkle_benchmark_stats() {
                    "\"paper_scan_throughput_MBps\": 98304.187500") !=
                    std::string::npos,
                "JSON omitted the repeated-scan diagnostic throughput");
+  require_test(contents.str().find(
+                   "\"warmup_leaf_indices\": [1, 2, 3]") !=
+                   std::string::npos,
+               "JSON omitted warm-up query IDs");
+  require_test(contents.str().find(
+                   "\"trial_leaf_indices\": [4, 5, 6, 7, 8]") !=
+                   std::string::npos,
+               "JSON omitted measured query IDs");
   // Publication gates reject invalid denominators, inconsistent wire counts,
   // and attempts to bypass the explicit 8 GB resource gate.
   bool rejected_zero_time = false;

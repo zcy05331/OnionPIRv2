@@ -31,6 +31,26 @@ size_t parse_size_argument(const char *option, const char *value) {
   return static_cast<size_t>(parsed);
 }
 
+uint64_t parse_seed_argument(const char *value) {
+  std::string text(value);
+  if (text.empty() || text.front() == '-') {
+    throw std::invalid_argument(
+        "--trial-seed requires a non-negative integer");
+  }
+  size_t parsed_characters = 0;
+  unsigned long long parsed = 0;
+  try {
+    parsed = std::stoull(text, &parsed_characters, 10);
+  } catch (const std::exception &) {
+    throw std::invalid_argument(
+        "--trial-seed requires a non-negative integer");
+  }
+  if (parsed_characters != text.size()) {
+    throw std::invalid_argument("--trial-seed is outside the uint64_t range");
+  }
+  return static_cast<uint64_t>(parsed);
+}
+
 const char *require_value(int argc, char *argv[], int &index) {
   if (index + 1 >= argc) {
     throw std::invalid_argument(std::string(argv[index]) +
@@ -47,6 +67,7 @@ int main(int argc, char *argv[]) {
     size_t num_experiments = 10;
     size_t warmup = 3;
     size_t leaf_count = size_t{1} << 24;
+    uint64_t trial_seed = MerkleBenchmarkOptions{}.trial_seed;
     std::string benchmark_json;
     bool run_optional_8gb = false;
 
@@ -62,6 +83,8 @@ int main(int argc, char *argv[]) {
       } else if (std::strcmp(argv[i], "--leaf-count") == 0) {
         leaf_count = parse_size_argument(
             "--leaf-count", require_value(argc, argv, i));
+      } else if (std::strcmp(argv[i], "--trial-seed") == 0) {
+        trial_seed = parse_seed_argument(require_value(argc, argv, i));
       } else if (std::strcmp(argv[i], "--benchmark-json") == 0) {
         benchmark_json = require_value(argc, argv, i);
       } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
@@ -78,6 +101,7 @@ int main(int argc, char *argv[]) {
       options.leaf_count = leaf_count;
       options.warmups = warmup;
       options.measured_trials = num_experiments;
+      options.trial_seed = trial_seed;
       options.run_optional_8gb = run_optional_8gb;
       BenchmarkReport report = run_merkle_benchmark_suite(options);
       print_benchmark_report(report);

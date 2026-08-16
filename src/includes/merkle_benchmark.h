@@ -115,6 +115,7 @@ struct BenchmarkWorkload {
   uint64_t warmups = 0;
   uint64_t measured_trials = 0;
   uint64_t trial_seed = 0;
+  std::vector<uint64_t> warmup_leaf_indices;
   std::vector<uint64_t> trial_leaf_indices;
   std::vector<OptionalWorkloadResult> optional_workloads;
 };
@@ -147,6 +148,11 @@ struct MerkleBenchmarkOptions {
   uint64_t trial_seed = 0x4f6e696f6e504952ULL;
   bool run_optional_8gb = false;
 };
+
+// Deterministically samples query IDs without replacement. Keeping the plan
+// public lets tests and benchmark artifacts verify the exact query schedule.
+BenchmarkTrialPlan make_benchmark_trial_plan(size_t leaf_count, size_t warmups,
+                                             size_t measured, uint64_t seed);
 
 uint64_t modeled_helper_key_bytes(const PirParams &reference);
 CommunicationStats communication_stats(

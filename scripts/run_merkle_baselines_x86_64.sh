@@ -10,6 +10,7 @@ JOBS="${JOBS:-2}"
 LEAF_COUNT="${LEAF_COUNT:-16777216}"
 WARMUPS="${WARMUPS:-3}"
 EXPERIMENTS="${EXPERIMENTS:-5}"
+TRIAL_SEED="${TRIAL_SEED:-5723628103747520850}"
 RUN_OPTIONAL_8GB="${RUN_OPTIONAL_8GB:-0}"
 
 COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
@@ -50,6 +51,7 @@ RUN_ARGS=(
   --leaf-count "${LEAF_COUNT}"
   --warmup "${WARMUPS}"
   --experiments "${EXPERIMENTS}"
+  --trial-seed "${TRIAL_SEED}"
   --benchmark-json "${RESULT_JSON}"
 )
 if [[ "${RUN_OPTIONAL_8GB}" == "1" ]]; then

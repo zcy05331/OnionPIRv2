@@ -88,6 +88,10 @@ LEAF_COUNT=256 WARMUPS=0 EXPERIMENTS=1 \
   RESULT_STEM=smoke scripts/run_merkle_baselines_x86_64.sh
 ```
 
+Set `TRIAL_SEED` to choose a reproducible query schedule. Warm-up and measured
+query IDs are sampled without replacement, so every trial in one run uses a
+different ID; all three cases reuse that same schedule for paired comparison.
+
 Set `RUN_OPTIONAL_8GB=1` to request the `2^27`-leaf paper row. It is skipped
 with an explicit `skipped_resource_limit` result unless estimated
 preprocessed storage plus a 2 GiB safety margin fits physical memory.
