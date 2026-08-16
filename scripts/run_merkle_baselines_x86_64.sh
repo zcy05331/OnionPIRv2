@@ -12,6 +12,7 @@ WARMUPS="${WARMUPS:-3}"
 EXPERIMENTS="${EXPERIMENTS:-5}"
 TRIAL_SEED="${TRIAL_SEED:-5723628103747520850}"
 RUN_OPTIONAL_8GB="${RUN_OPTIONAL_8GB:-0}"
+BENCHMARK_CASE="${BENCHMARK_CASE:-all}"
 
 COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
 SHORT_COMMIT="$(git -C "${PROJECT_DIR}" rev-parse --short=12 HEAD)"
@@ -52,6 +53,7 @@ RUN_ARGS=(
   --warmup "${WARMUPS}"
   --experiments "${EXPERIMENTS}"
   --trial-seed "${TRIAL_SEED}"
+  --benchmark-case "${BENCHMARK_CASE}"
   --benchmark-json "${RESULT_JSON}"
 )
 if [[ "${RUN_OPTIONAL_8GB}" == "1" ]]; then

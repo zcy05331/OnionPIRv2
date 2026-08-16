@@ -149,6 +149,21 @@ void PirTest::test_merkle_benchmark_stats() {
   require_test(rejected_count_mismatch,
                "accepted mismatched PIR call and response counts");
 
+  MerkleBenchmarkOptions standard_only_options;
+  standard_only_options.leaf_count = 256;
+  standard_only_options.warmups = 0;
+  standard_only_options.measured_trials = 1;
+  standard_only_options.trial_seed = 0x7374616e64617264ULL;
+  standard_only_options.case_selection =
+      BenchmarkCaseSelection::standard_onionpir;
+  const BenchmarkReport standard_only_report =
+      run_merkle_benchmark_suite(standard_only_options);
+  require_test(standard_only_report.cases.size() == 1,
+               "standard-only benchmark executed extra cases");
+  require_test(standard_only_report.cases.front().name ==
+                   "standard_onionpir",
+               "standard-only benchmark omitted the requested case");
+
   bool rejected_ungated_large_primary = false;
   try {
     MerkleBenchmarkOptions unsafe_options;

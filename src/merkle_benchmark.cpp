@@ -847,9 +847,21 @@ PirParams make_benchmark_reference(const MerkleWorkload &workload) {
 
 std::vector<BenchmarkCaseResult> execute_case_set(
     const MerkleWorkload &workload, const PirParams &reference,
-    const BenchmarkTrialPlan &trials, const std::string &name_suffix = "") {
+    const BenchmarkTrialPlan &trials, BenchmarkCaseSelection selection,
+    const std::string &name_suffix = "") {
   BenchmarkCaseExecution standard =
       run_standard_case(workload, reference, trials);
+  standard.result.name += name_suffix;
+
+  // Return before constructing either Merkle-path database. This makes a
+  // Standard-only repetition independent of the flat/layerwise setup costs.
+  if (selection == BenchmarkCaseSelection::standard_onionpir) {
+    return {std::move(standard.result)};
+  }
+  if (selection != BenchmarkCaseSelection::all) {
+    throw std::invalid_argument("Unknown benchmark case selection");
+  }
+
   BenchmarkCaseExecution flat =
       run_merkle_flat_case(workload, reference, trials);
   BenchmarkCaseExecution layerwise =
@@ -860,7 +872,6 @@ std::vector<BenchmarkCaseResult> execute_case_set(
     throw std::runtime_error(
         "Flat and layerwise measured Merkle paths differ");
   }
-  standard.result.name += name_suffix;
   flat.result.name += name_suffix;
   layerwise.result.name += name_suffix;
   return {std::move(standard.result), std::move(flat.result),
@@ -1048,7 +1059,8 @@ BenchmarkReport run_merkle_benchmark_suite(
       trials.measured_leaf_indices.begin(), trials.measured_leaf_indices.end());
 
   append_case_set(report.cases,
-                  execute_case_set(workload, reference, trials));
+                  execute_case_set(workload, reference, trials,
+                                   options.case_selection));
 
   OptionalWorkloadResult optional;
   optional.leaf_count = size_t{1} << 27;
@@ -1085,7 +1097,8 @@ BenchmarkReport run_merkle_benchmark_suite(
       append_case_set(
           report.cases,
           execute_case_set(optional_workload, optional_reference,
-                           optional_trials, "_optional_8gb"));
+                           optional_trials, options.case_selection,
+                           "_optional_8gb"));
     }
   }
   report.workload.optional_workloads.push_back(std::move(optional));

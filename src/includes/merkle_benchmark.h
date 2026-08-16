@@ -141,12 +141,18 @@ struct BenchmarkCaseExecution {
   std::vector<MerklePath> measured_paths;
 };
 
+enum class BenchmarkCaseSelection {
+  all,
+  standard_onionpir,
+};
+
 struct MerkleBenchmarkOptions {
   size_t leaf_count = size_t{1} << 24;
   size_t warmups = 3;
   size_t measured_trials = 5;
   uint64_t trial_seed = 0x4f6e696f6e504952ULL;
   bool run_optional_8gb = false;
+  BenchmarkCaseSelection case_selection = BenchmarkCaseSelection::all;
 };
 
 // Deterministically samples query IDs without replacement. Keeping the plan

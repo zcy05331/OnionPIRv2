@@ -85,6 +85,11 @@ def main():
         help="Write structured Merkle benchmark JSON to FILE",
     )
     parser.add_argument(
+        "--benchmark-case", choices=("all", "standard_onionpir"),
+        default="all",
+        help="Merkle benchmark case to run (default: all)",
+    )
+    parser.add_argument(
         "--leaf-count", type=int, default=1 << 24,
         help="Merkle benchmark leaf count (power of two; default: 2^24)",
     )
@@ -127,6 +132,7 @@ def main():
             parser.error("--leaf-count is capped at 2^24; use "
                          "--run-optional-8gb for the resource-gated 2^27 row")
         run_cmd.extend(["--leaf-count", str(args.leaf_count)])
+        run_cmd.extend(["--benchmark-case", args.benchmark_case])
         if args.benchmark_json:
             benchmark_path = args.benchmark_json
             if "/" not in benchmark_path:

@@ -70,6 +70,7 @@ int main(int argc, char *argv[]) {
     uint64_t trial_seed = MerkleBenchmarkOptions{}.trial_seed;
     std::string benchmark_json;
     bool run_optional_8gb = false;
+    BenchmarkCaseSelection benchmark_case = BenchmarkCaseSelection::all;
 
     for (int i = 1; i < argc; ++i) {
       if (std::strcmp(argv[i], "--test") == 0) {
@@ -87,6 +88,16 @@ int main(int argc, char *argv[]) {
         trial_seed = parse_seed_argument(require_value(argc, argv, i));
       } else if (std::strcmp(argv[i], "--benchmark-json") == 0) {
         benchmark_json = require_value(argc, argv, i);
+      } else if (std::strcmp(argv[i], "--benchmark-case") == 0) {
+        const std::string value = require_value(argc, argv, i);
+        if (value == "all") {
+          benchmark_case = BenchmarkCaseSelection::all;
+        } else if (value == "standard_onionpir") {
+          benchmark_case = BenchmarkCaseSelection::standard_onionpir;
+        } else {
+          throw std::invalid_argument(
+              "--benchmark-case must be all or standard_onionpir");
+        }
       } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
         run_optional_8gb = true;
       } else if (std::strcmp(argv[i], "--no-compress") == 0) {
@@ -103,6 +114,7 @@ int main(int argc, char *argv[]) {
       options.measured_trials = num_experiments;
       options.trial_seed = trial_seed;
       options.run_optional_8gb = run_optional_8gb;
+      options.case_selection = benchmark_case;
       BenchmarkReport report = run_merkle_benchmark_suite(options);
       print_benchmark_report(report);
       if (!benchmark_json.empty()) {

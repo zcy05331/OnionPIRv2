@@ -38,6 +38,7 @@ python run.py [options]
 | `--build-only` | Build without running |
 | `--leaf-count N` | Merkle benchmark leaf count; power of two (default: `2^24`) |
 | `--benchmark-json FILE` | Write structured Merkle benchmark output |
+| `--benchmark-case NAME` | Run `all` cases or only `standard_onionpir` (default: `all`) |
 | `--run-optional-8gb` | Attempt the resource-gated `2^27`-leaf workload |
 | `-h`, `--help` | Show help message |
 
@@ -91,6 +92,8 @@ LEAF_COUNT=256 WARMUPS=0 EXPERIMENTS=1 \
 Set `TRIAL_SEED` to choose a reproducible query schedule. Warm-up and measured
 query IDs are sampled without replacement, so every trial in one run uses a
 different ID; all three cases reuse that same schedule for paired comparison.
+Set `BENCHMARK_CASE=standard_onionpir` when repeating only the Standard case;
+the runner returns before allocating or executing either Merkle-path baseline.
 
 Set `RUN_OPTIONAL_8GB=1` to request the `2^27`-leaf paper row. It is skipped
 with an explicit `skipped_resource_limit` result unless estimated
