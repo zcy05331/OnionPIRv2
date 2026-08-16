@@ -20,6 +20,8 @@ bool throws_invalid_argument(Fn &&fn) {
 void PirTest::test_merkle_baseline() {
   PirParams scheme;
   MerkleWorkload small{size_t{1} << 8, 8, 32};
+  // Boundary leaves plus an interior level anchor sibling and flat-ordinal
+  // conventions independently of the encrypted integration tests.
   require_test(merkle_sibling_local(0, 8, 8) == 1,
                "leaf zero sibling");
   require_test(merkle_sibling_local(255, 8, 8) == 254,
@@ -29,6 +31,8 @@ void PirTest::test_merkle_baseline() {
   require_test(merkle_flat_ordinal(1, 0) == 0, "first flat node");
   require_test(merkle_flat_ordinal(8, 255) == 509, "last flat node");
 
+  // First/middle/last checks cross the 12-bit coefficient boundaries in one
+  // full 96-node plaintext and catch ordering or truncation errors.
   std::vector<MerkleNode> nodes(96);
   for (size_t i = 0; i < nodes.size(); ++i) {
     nodes[i] = synthetic_merkle_node(8, i);
@@ -41,6 +45,7 @@ void PirTest::test_merkle_baseline() {
   require_test(decode_merkle_node(encoded, 95, scheme) == nodes[95],
                "codec last");
 
+  // Partial final plaintexts must expose deterministic zero-filled slots.
   RlwePt partial = encode_merkle_nodes(
       std::span<const MerkleNode>(nodes.data(), 1), scheme);
   require_test(decode_merkle_node(partial, 1, scheme) == MerkleNode{},
@@ -53,6 +58,7 @@ void PirTest::test_merkle_baseline() {
   require_test(decode_merkle_node(flat_last, 30, scheme) == MerkleNode{},
                "flat final padding");
 
+  // Freeze representative planner transitions and the exact H=24 padded total.
   PirParams reference = scheme.with_layout({349526, 10, true});
   auto plan = plan_layer_layouts(24, 96, reference);
   require_test(plan.size() == 24, "one plan entry per non-root level");
@@ -67,6 +73,8 @@ void PirTest::test_merkle_baseline() {
   require_test(sum_padded_bytes(plan) == 1074843648ULL,
                "layer padded total");
 
+  // Public helpers must reject malformed coordinates and workload geometry
+  // rather than silently wrapping size_t indices.
   require_test(throws_invalid_argument(
                    [] { (void)merkle_sibling_local(0, 8, 0); }),
                "accepted root as authentication sibling level");

@@ -178,7 +178,13 @@ void finalize_case_statistics(BenchmarkCaseResult &result) {
         "Server compute time must be a finite positive duration");
   }
   constexpr double bytes_per_mebibyte = static_cast<double>(uint64_t{1} << 20);
+  // The paper-defined metric uses the plaintext database footprint once. The
+  // separate scan diagnostics below may count repeated passes (H for flat) and
+  // therefore measure kernel scan efficiency rather than path throughput.
   result.paper_server_throughput_MBps =
+      static_cast<double>(result.paper_plaintext_database_bytes) /
+      server_seconds / bytes_per_mebibyte;
+  result.paper_scan_throughput_MBps =
       static_cast<double>(result.paper_plaintext_scan_bytes) /
       server_seconds / bytes_per_mebibyte;
   result.padded_scan_throughput_MBps =
@@ -327,6 +333,8 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
         << communication.first_session_total_bytes_mixed
         << ",\n      \"paper_server_throughput_MBps\": "
         << result.paper_server_throughput_MBps
+        << ",\n      \"paper_scan_throughput_MBps\": "
+        << result.paper_scan_throughput_MBps
         << ",\n      \"padded_scan_throughput_MBps\": "
         << result.padded_scan_throughput_MBps
         << ",\n      \"useful_response_bytes\": "
@@ -424,6 +432,8 @@ PirCallOutput timed_pir_call(PirClient &client,
                              std::optional<size_t> node_offset) {
   PirCallOutput output;
 
+  // All cases use identical timer boundaries. Callers perform oracle/path
+  // comparison after this function so correctness work is outside the timer.
   auto start = BenchmarkClock::now();
   RlweCt query =
       client.fast_generate_query(query_params, plaintext_index);
@@ -596,6 +606,8 @@ BenchmarkCaseExecution run_merkle_flat_case(
     PathTrialOutput trial;
     trial.response_bytes.reserve(workload.tree_height);
     trial.path.reserve(workload.tree_height);
+    // One independent PIR over the complete flat tree per path level; only the
+    // selected breadth-first ordinal changes between calls.
     for (size_t level = workload.tree_height; level >= 1; --level) {
       const size_t local =
           merkle_sibling_local(leaf, workload.tree_height, level);
@@ -639,6 +651,9 @@ BenchmarkCaseExecution run_merkle_flat_case(
   result.name = "merkle_flat";
   result.correctness_passed = true;
   populate_reference_database_metadata(result, workload, reference);
+  // The database footprint remains one flat tree for paper throughput. Scan
+  // diagnostics multiply by H because the complete-path trial reads that same
+  // database H times; server_compute likewise sums all H calls.
   result.paper_plaintext_scan_bytes = checked_multiply(
       result.paper_plaintext_database_bytes, workload.tree_height,
       "flat paper plaintext scan bytes");
@@ -672,6 +687,8 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   SharedPirSessionKeys keys = client.create_session_keys();
   std::vector<std::unique_ptr<PirServer>> servers;
   servers.reserve(layouts.size());
+  // Each level gets its own minimal shape, but every server points to the same
+  // immutable scheme-level helper-key allocation.
   for (const LayerLayout &layout : layouts) {
     auto server = std::make_unique<PirServer>(layout.params);
     server->set_client_session_keys(client.get_client_id(), keys);
@@ -691,6 +708,8 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
     PathTrialOutput trial;
     trial.response_bytes.reserve(workload.tree_height);
     trial.path.reserve(workload.tree_height);
+    // Still H independent PIR calls, but call l contains only the 2^l nodes of
+    // that level instead of another copy of the full flattened tree.
     for (size_t level = workload.tree_height; level >= 1; --level) {
       const LayerLayout &layout = layouts.at(level - 1);
       const size_t local =
@@ -734,6 +753,8 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   result.name = "merkle_layerwise";
   result.correctness_passed = true;
   result.raw_dataset_bytes = raw_merkle_bytes(workload);
+  // The stored plaintext database is the sum of all disjoint level databases.
+  // Each is scanned once per path, so database and scan bytes coincide here.
   for (const LayerLayout &layout : layouts) {
     result.paper_plaintext_database_bytes = checked_add(
         result.paper_plaintext_database_bytes,
@@ -940,7 +961,9 @@ BenchmarkReport run_merkle_benchmark_suite(
       options.trial_seed);
 
   BenchmarkReport report;
-  report.schema_version = "onionpir-merkle-baselines-v1";
+  // v2 corrects paper_server_throughput_MBps to database_bytes/server_time and
+  // retains repeated work as the explicit paper_scan_throughput diagnostic.
+  report.schema_version = "onionpir-merkle-baselines-v2";
   report.environment.commit = environment_value("ONIONPIR_BENCH_COMMIT");
   report.environment.branch = environment_value("ONIONPIR_BENCH_BRANCH");
   report.environment.build_type = "Benchmark";
@@ -1047,13 +1070,14 @@ BenchmarkReport run_merkle_benchmark_suite(
 
 void print_benchmark_report(const BenchmarkReport &report) {
   std::cout << report.environment.non_native_label << '\n';
-  std::cout << "case,correct,server_ms,paper_MBps,padded_MBps,online_bytes,"
-               "first_session_bytes\n";
+  std::cout << "case,correct,server_ms,paper_MBps,paper_scan_MBps,"
+               "padded_scan_MBps,online_bytes,first_session_bytes\n";
   for (const BenchmarkCaseResult &result : report.cases) {
     std::cout << result.name << ','
               << (result.correctness_passed ? "true" : "false") << ','
               << milliseconds(result.timing.server_compute) << ','
               << result.paper_server_throughput_MBps << ','
+              << result.paper_scan_throughput_MBps << ','
               << result.padded_scan_throughput_MBps << ','
               << result.communication.online_total_bytes_mixed << ','
               << result.communication.first_session_total_bytes_mixed

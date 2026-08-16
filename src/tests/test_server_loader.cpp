@@ -12,6 +12,8 @@ void PirTest::test_server_loader() {
     }
   };
 
+  // The shape rounds three logical rows to four. The callback runs only for
+  // real rows; the loader creates and records a zero-filled padding row.
   server.load_data(3, source, {0, 2, 3});
   require_test(source_calls == 3, "source called for shape padding");
   require_test(server.direct_get_original_plaintext(0).data[7] == 7,
@@ -21,6 +23,7 @@ void PirTest::test_server_loader() {
   require_test(server.direct_get_original_plaintext(3).data[7] == 0,
                "shape padding");
 
+  // The legacy random-data API must traverse the same preprocessing path.
   PirServer random_server(params);
   random_server.gen_data({0, 3});
   require_test(random_server.direct_get_original_plaintext(0).data.size() ==
@@ -30,6 +33,7 @@ void PirTest::test_server_loader() {
                    params.get_plain_mod(),
                "random source coefficient range");
 
+  // Validate callback output before it enters NTT preprocessing.
   bool rejected_bad_size = false;
   try {
     server.load_data(1, [&](size_t, RlwePt &out) {

@@ -22,6 +22,8 @@ public:
   @param pt_idx The input to the PIR blackbox.
   */
   RlweCt fast_generate_query(const size_t pt_idx);
+  // Generate against a scheme-compatible runtime layout while reusing this
+  // client's secret and helper material. Used by per-level PIR servers.
   RlweCt fast_generate_query(const PirParams &query_params, size_t pt_idx);
 
   // [2025 Algorithm 1: QueryPack]
@@ -41,6 +43,7 @@ public:
   // Produce the per-client GSW key (encryption of s under the data modulus) in
   // its final flat NTT layout, ready to hand to PirServer::set_client_gsw_key.
   GSWCt generate_gsw_from_key();
+  // Construct one scheme-level helper bundle for all compatible layouts.
   SharedPirSessionKeys create_session_keys();
 
   inline size_t get_client_id() const { return client_id_; }
@@ -88,7 +91,6 @@ private:
   std::vector<uint64_t> get_sk_ntt_small_q(uint64_t old_q, uint64_t small_q) const;
 
 };
-
 
 
 

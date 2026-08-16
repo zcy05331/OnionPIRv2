@@ -468,6 +468,8 @@ Define `TrialTiming`, `CommunicationStats`, `BenchmarkCaseResult`, and `Benchmar
 
 ```cpp
 paper_server_throughput_MBps =
+    paper_plaintext_database_bytes / server_compute_seconds / (1ULL << 20);
+paper_scan_throughput_MBps =
     paper_plaintext_scan_bytes / server_compute_seconds / (1ULL << 20);
 padded_scan_throughput_MBps =
     logical_padded_scan_bytes / server_compute_seconds / (1ULL << 20);

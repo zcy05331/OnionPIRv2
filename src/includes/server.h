@@ -41,6 +41,8 @@ public:
   size_t save_resp_to_stream(const RlweCt &response, std::stringstream &resp_stream);
   void set_client_bv_galois_key(const size_t client_id, bvks::BvGaloisKeys bv_keys);
   void set_client_gsw_key(const size_t client_id, GSWCt gsw_key);
+  // Multi-layout API: retain shared immutable helper material instead of
+  // copying it into every level server. Legacy setters remain supported.
   void set_client_session_keys(size_t client_id, SharedPirSessionKeys keys);
   SharedPirSessionKeys client_session_keys(size_t client_id) const;
 

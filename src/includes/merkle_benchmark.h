@@ -13,6 +13,8 @@ using BenchmarkClock = std::chrono::steady_clock;
 using BenchmarkDuration = std::chrono::nanoseconds;
 
 struct TrialTiming {
+  // setup is offline. The remaining fields partition one local online trial;
+  // they intentionally exclude network transport latency.
   BenchmarkDuration setup{};
   BenchmarkDuration client_query{};
   BenchmarkDuration server_compute{};
@@ -23,6 +25,8 @@ struct TrialTiming {
 };
 
 struct CommunicationStats {
+  // Query/helper sizes are seed-compressed protocol models. Response bytes are
+  // read from the real serializer, hence totals containing both are "mixed".
   uint64_t pir_call_count = 0;
   uint64_t modeled_query_bytes_per_pir = 0;
   uint64_t online_query_bytes_modeled = 0;
@@ -36,6 +40,9 @@ struct BenchmarkCaseResult {
   std::string name;
   bool correctness_passed = false;
   uint64_t raw_dataset_bytes = 0;
+  // "database" is the plaintext footprint stored by one case. "scan" counts
+  // all passes made during one reported trial: H passes over the same flat
+  // database versus one pass over each of H level databases.
   uint64_t paper_plaintext_database_bytes = 0;
   uint64_t logical_padded_database_bytes = 0;
   uint64_t paper_plaintext_scan_bytes = 0;
@@ -44,7 +51,13 @@ struct BenchmarkCaseResult {
   uint64_t physical_preprocessed_storage_bytes = 0;
   TrialTiming timing;
   CommunicationStats communication;
+  // Paper definition: plaintext database bytes / full-case server time. For a
+  // Merkle case, full-case time retrieves the complete H-node path.
   double paper_server_throughput_MBps = 0.0;
+  // Diagnostics below charge every repeated database pass. They explain
+  // kernel efficiency but are not end-to-end Merkle throughput. All _MBps
+  // fields use the repository convention 1 MB = 2^20 bytes (MiB/s).
+  double paper_scan_throughput_MBps = 0.0;
   double padded_scan_throughput_MBps = 0.0;
   uint64_t useful_response_bytes = 0;
   double useful_response_throughput_Bps = 0.0;
@@ -123,6 +136,7 @@ struct BenchmarkTrialPlan {
 
 struct BenchmarkCaseExecution {
   BenchmarkCaseResult result;
+  // Correctness evidence only. Oracle comparisons occur outside timed regions.
   std::vector<MerklePath> measured_paths;
 };
 

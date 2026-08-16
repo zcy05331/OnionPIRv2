@@ -562,8 +562,19 @@ layerwise 的通信量应相同；若不同，benchmark 必须失败并解释实
 ## 吞吐量统计 contract
 
 论文将 server throughput 定义为“plaintext database size in bytes /
-server computation time”。为了与该定义对齐，同时保留 Merkle packing 和
-shape padding 的诊断信息，每个 case 必须同时报三个 scan-byte 口径：
+server computation time”。本 benchmark 的 Merkle case 以完整 H 层 path 为一次
+case，因此分母是 H 次 PIR 的 server computation 总和，分子是该 case 存储的
+plaintext database footprint，只计一次：
+
+```text
+paper_plaintext_database_bytes:
+  standard         = flat_target_num_pt * plaintext_payload_bytes
+  merkle_flat      = flat_target_num_pt * plaintext_payload_bytes
+  merkle_layerwise = sum(ceil(2^l / 96) * plaintext_payload_bytes,
+                         l=1..H)
+```
+
+为了另外诊断重复扫描和 shape padding，每个 case 同时报三个 scan-byte 口径：
 
 ```text
 paper_plaintext_scan_bytes:
@@ -585,16 +596,20 @@ raw_application_scan_bytes:
 ```
 
 `paper_plaintext_scan_bytes` 排除为 PIR shape rounding 额外增加的 plaintexts，但保留
-最后一个 logical plaintext 内的 node-packing padding；它是主要的论文对齐
-分子。`logical_padded_scan_bytes` 是实际 PIR shape 扫描的 logical bytes，
+最后一个 logical plaintext 内的 node-packing padding；它是重复扫描诊断分子，
+不是论文 throughput 的主分子。`logical_padded_scan_bytes` 是实际 PIR shape
+扫描的 logical bytes，
 只用于诊断 padding 影响。`raw_application_scan_bytes` 是真实 Merkle nodes
 在各次 PIR 中被重复扫描的应用层字节数。三者都不是 NTT/composite
 physical RAM bytes。
 
-主要吞吐量和 padding 诊断吞吐量分别为：
+主要吞吐量、paper scan 诊断和 padding scan 诊断分别为：
 
 ```text
 paper_server_throughput_MBps =
+    paper_plaintext_database_bytes / server_compute_seconds / 2^20
+
+paper_scan_throughput_MBps =
     paper_plaintext_scan_bytes / server_compute_seconds / 2^20
 
 padded_scan_throughput_MBps =
@@ -676,7 +691,7 @@ benchmark 同时打印 human-readable table 并写一个不依赖第三方库的
 JSON 至少包含：
 
 ```text
-schema_version
+schema_version = onionpir-merkle-baselines-v2
 environment { commit, branch, build_type, config, architecture,
               hexl_enabled, hexl_version, rosetta, non_native_label }
 paper_alignment { paper, revision, sections, poly_degree, log_q, log_t,
@@ -710,6 +725,7 @@ cases[] {
   helper_key_bytes_modeled
   first_session_total_bytes_mixed
   paper_server_throughput_MBps
+  paper_scan_throughput_MBps
   padded_scan_throughput_MBps
   useful_response_bytes
   useful_response_throughput_Bps

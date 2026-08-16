@@ -9,6 +9,7 @@ namespace {
 
 void require_expected_path(const MerklePath &path, size_t leaf,
                            size_t tree_height) {
+  // Runners return leaf-to-root order (levels H..1), matching client use.
   require_test(path.size() == tree_height, "Merkle path length");
   for (size_t offset = 0; offset < tree_height; ++offset) {
     const size_t level = tree_height - offset;
@@ -22,6 +23,8 @@ void require_expected_path(const MerklePath &path, size_t leaf,
 }  // namespace
 
 void PirTest::test_merkle_integration() {
+  // H=8 cheaply covers first, last, and interior leaves through codec, query,
+  // server evaluation, response wire round-trip, and decryption.
   const MerkleWorkload small{size_t{1} << 8, 8, 32};
   const size_t small_target = utils::roundup_div(
       2 * (small.leaf_count - 1), size_t{96});
@@ -57,6 +60,8 @@ void PirTest::test_merkle_integration() {
   validate_matching_path_communication(flat.result.communication,
                                        layerwise.result.communication);
 
+  // H=16 forces remaining-dimension RGSW MUX work; a small-only fixture could
+  // otherwise pass while testing only the first-dimension path.
   const MerkleWorkload multidimensional{size_t{1} << 16, 16, 32};
   const size_t multidimensional_target = utils::roundup_div(
       2 * (multidimensional.leaf_count - 1), size_t{96});

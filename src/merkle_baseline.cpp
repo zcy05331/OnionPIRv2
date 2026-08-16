@@ -113,6 +113,11 @@ RlwePt encode_merkle_nodes(std::span<const MerkleNode> nodes,
     throw std::invalid_argument("A plaintext holds at most 96 Merkle nodes");
   }
 
+  // v2 gives 2048 coefficients at 12 bits each: exactly 3072 payload bytes,
+  // so one plaintext carries 96 fixed 32-byte Merkle nodes without spillover.
+  // This is coefficient bit-packing, not BFV SIMD/evaluation-slot packing.
+  // Rebuild the same bitstream before slicing out the requested node. Rejecting
+  // non-12-bit digits catches malformed decrypted plaintexts at the boundary.
   std::vector<uint8_t> bytes(payload_bytes, 0);
   for (size_t i = 0; i < nodes.size(); ++i) {
     std::memcpy(bytes.data() + i * sizeof(MerkleNode), nodes[i].data(),
@@ -246,6 +251,9 @@ std::vector<LayerLayout> plan_layer_layouts(
     const size_t node_count = size_t{1} << level;
     const size_t target_num_pt = utils::roundup_div(node_count, nodes_per_pt);
 
+    // Keep each layer no deeper than the frozen flat reference shape. Tuple
+    // order minimizes padded plaintexts first, then expansion work, remaining
+    // dimensions, and finally expansion height.
     bool found = false;
     std::tuple<size_t, size_t, size_t, size_t> best_score;
     PirParams best_params = reference;

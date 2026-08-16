@@ -9,6 +9,8 @@ void PirTest::test_shared_session() {
   PirClient client(reference);
   SharedPirSessionKeys keys = client.create_session_keys();
 
+  // Singleton, middle, and largest-layer shapes must reuse this exact helper
+  // allocation while still completing an encrypted round trip.
   const std::array<PirLayoutConfig, 3> layouts = {
       PirLayoutConfig{1, 0, true},
       PirLayoutConfig{43, 5, true},
@@ -25,6 +27,7 @@ void PirTest::test_shared_session() {
         server.client_session_keys(client.get_client_id()).get() == keys.get(),
         "shared bundle identity");
 
+    // Query the final logical plaintext, not rounded shape padding.
     const size_t query_index = params.get_target_num_pt() - 1;
     PlaintextSource source = [&](size_t index, RlwePt &out) {
       out.data.resize(params.get_poly_degree());
@@ -47,6 +50,7 @@ void PirTest::test_shared_session() {
                  "cross-layout encrypted retrieval mismatch");
   }
 
+  // Bounds are checked against the runtime layout before encryption begins.
   bool rejected_out_of_range = false;
   try {
     (void)client.fast_generate_query(reference, reference.get_num_pt());

@@ -7,6 +7,8 @@
 
 void PirTest::test_merkle_benchmark_stats() {
   PirParams reference = PirParams().with_layout({349526, 10, true});
+  // Freeze v2 seed-compressed request/helper models independently of the
+  // response serializer, whose byte count is measured at runtime.
   require_test(reference.get_BFV_size(true) == 14880, "query bytes");
   require_test(modeled_helper_key_bytes(reference) == 1488000,
                "helper bytes");
@@ -18,6 +20,8 @@ void PirTest::test_merkle_benchmark_stats() {
   require_test(standard.first_session_total_bytes_mixed == 1514144,
                "standard first session");
 
+  // Both naive path baselines make H calls and share one helper bundle, so
+  // their online and first-session totals must match exactly.
   CommunicationStats path = communication_stats(
       reference, 24, std::vector<size_t>(24, 11264));
   require_test(path.online_total_bytes_mixed == 627456, "path online");
@@ -35,18 +39,21 @@ void PirTest::test_merkle_benchmark_stats() {
   require_test(rejected_path_mismatch,
                "accepted flat/layerwise communication mismatch");
 
+  // Model a flat H=24 trial: one ~1 GiB plaintext database, 24 repeated scans,
+  // and one full-path server time. Paper throughput must use the database
+  // footprint once; paper_scan_throughput retains the repeated-work diagnostic.
   BenchmarkCaseResult result;
-  result.name = "standard_onionpir";
+  result.name = "merkle_flat";
   result.correctness_passed = true;
   result.communication = standard;
   result.raw_dataset_bytes = 1073741760;
   result.paper_plaintext_database_bytes = 1073743872;
   result.logical_padded_database_bytes = 1074266112;
-  result.paper_plaintext_scan_bytes = 1073743872;
-  result.logical_padded_scan_bytes = 1074266112;
-  result.raw_application_scan_bytes = 1073743872;
+  result.paper_plaintext_scan_bytes = 25769852928;
+  result.logical_padded_scan_bytes = 25782386688;
+  result.raw_application_scan_bytes = 25769852928;
   result.physical_preprocessed_storage_bytes = 5729419264;
-  result.useful_response_bytes = 3072;
+  result.useful_response_bytes = 768;
   result.timing.setup = std::chrono::milliseconds(12);
   result.timing.client_query = std::chrono::milliseconds(1);
   result.timing.server_compute = std::chrono::milliseconds(250);
@@ -55,10 +62,10 @@ void PirTest::test_merkle_benchmark_stats() {
   finalize_case_statistics(result);
   require_test(result.paper_server_throughput_MBps > 4095.0 &&
                    result.paper_server_throughput_MBps < 4097.0,
-               "paper throughput denominator");
-
+               "paper throughput used repeated scan bytes as database size");
+  // JSON must keep the primary and scan metrics distinct and preserve bytes.
   BenchmarkReport report;
-  report.schema_version = "1";
+  report.schema_version = "onionpir-merkle-baselines-v2";
   report.environment.architecture = "x86_64";
   report.environment.hexl_enabled = true;
   report.environment.rosetta = true;
@@ -80,10 +87,16 @@ void PirTest::test_merkle_benchmark_stats() {
   require_test(contents.str().find("\"online_total_bytes_mixed\": 26144") !=
                    std::string::npos,
                "JSON omitted exact online bytes");
-  require_test(contents.str().find("\"paper_server_throughput_MBps\"") !=
+  require_test(contents.str().find(
+                   "\"paper_server_throughput_MBps\": 4096.007812") !=
                    std::string::npos,
-               "JSON omitted throughput field");
-
+               "JSON did not use database size for paper throughput");
+  require_test(contents.str().find(
+                   "\"paper_scan_throughput_MBps\": 98304.187500") !=
+                   std::string::npos,
+               "JSON omitted the repeated-scan diagnostic throughput");
+  // Publication gates reject invalid denominators, inconsistent wire counts,
+  // and attempts to bypass the explicit 8 GB resource gate.
   bool rejected_zero_time = false;
   try {
     BenchmarkCaseResult invalid = result;
