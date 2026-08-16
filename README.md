@@ -104,23 +104,24 @@ Query and helper-key byte counts are modeled seed-compressed sizes; response
 bytes are measured from the repository's serializer, so totals ending in
 `_mixed` are intentionally not described as fully measured wire traffic.
 
-The canonical H=24 run from commit `abaca522bc98` used 3 warmups and 5 measured
-trials. Full metadata and per-stage timings are in
-`outputs/merkle_baselines/abaca522bc98-m4-rosetta-v2.json` (SHA-256
-`ffbfbeb39ec1905120e102bc4ce5f5153ea1a6a8ad6c697f612098a8ff167269`).
+The canonical H=24 run from commit `fff03386deea` used 3 warmups and 5 measured
+trials with seed `15794071829771909372`. Its eight query IDs are distinct and
+recorded in the artifact. Full metadata and per-stage timings are in
+`outputs/merkle_baselines/fff03386deea-m4-rosetta-v2-unique-queries.json`
+(SHA-256 `c41b147c1d2caa432b2cf5e7bc9cc96562fb3df2874b2b1d31eb61f3492ff556`).
 
 | Case | Avg. server time | Paper throughput (DB/time) | Repeated-scan bandwidth | Modeled queries | Actual responses | Online mixed | Shared helper keys | First session mixed |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `standard_onionpir` | 1,373.953 ms | 745.296 MiB/s | 745.296 MiB/s | 14,880 B | 11,264 B | 26,144 B | 1,488,000 B | 1,514,144 B |
-| `merkle_flat` | 34,840.405 ms | 29.391 MiB/s | 705.389 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
-| `merkle_layerwise` | 2,009.910 ms | 509.496 MiB/s | 509.496 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
+| `standard_onionpir` | 2,397.800 ms | 427.059 MiB/s | 427.059 MiB/s | 14,880 B | 11,264 B | 26,144 B | 1,488,000 B | 1,514,144 B |
+| `merkle_flat` | 35,265.343 ms | 29.037 MiB/s | 696.889 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
+| `merkle_layerwise` | 1,990.784 ms | 514.390 MiB/s | 514.390 MiB/s | 357,120 B | 270,336 B | 627,456 B | 1,488,000 B | 2,115,456 B |
 
-The checked-in artifact uses the original v1 schema, where
+The earlier `abaca522bc98` artifact is retained for provenance and uses the
+original v1 schema, where
 `paper_server_throughput_MBps` was incorrectly computed from repeated scan
-bytes. Treat its 705.389 MiB/s flat value as scan bandwidth. Schema v2 corrects
-the paper-defined metric to plaintext database bytes divided by the complete
-case's server time and reports repeated work separately as
-`paper_scan_throughput_MBps`.
+bytes. Treat its 705.389 MiB/s flat value as scan bandwidth. The current schema
+v2 artifact uses plaintext database bytes divided by the complete case's server
+time and reports repeated work separately as `paper_scan_throughput_MBps`.
 
 Flat scan bandwidth can still exceed layerwise scan bandwidth without a timing
 error. Every H=24 flat call uses a `512 x 683` first-dimension shape. The largest
@@ -130,15 +131,15 @@ MUX reductions. Smaller layers repeatedly pay query expansion, RGSW completion,
 candidate conversion, MUX, and modulus-switch costs for progressively fewer
 bytes. Those non-linear costs are amortized better by the large regular flat
 scan, but flat repeats the full database 24 times. Consequently layerwise still
-has 17.33x lower full-path server latency and 382.107 versus 22.043 useful
+has 17.71x lower full-path server latency and 385.778 versus 21.778 useful
 response bytes/s.
 
 The optional H=27 row was not extrapolated: its estimated peak allocation was
 45,822,181,376 bytes, so the 17,179,869,184-byte host recorded
-`skipped_resource_limit` after applying the fixed 2 GiB safety margin. All 392
-decryptions across warmup and measured calls passed; the logged residual noise
-budget ranged from 1 to 3 bits, so the H=24 result is correct but has a narrow
-minimum noise margin.
+`skipped_resource_limit` after applying the fixed 2 GiB safety margin in the
+earlier gated run. All 392 decryptions in the current unique-query run passed;
+the logged residual noise budget ranged from 1 to 3 bits, so the H=24 result is
+correct but has a narrow minimum noise margin.
 
 **Available configs:** `k1`, `k1_comp` (default, composite-mod K=1), `k2_mp`, `n4096_k2_mp`. See `src/includes/database_constants.h` for per-config parameters.
 
