@@ -1,0 +1,81 @@
+{
+  "schema_version": "onionpir-merkle-baselines-v2",
+  "environment": {
+    "commit": "4f6499894f1342a5a89590e0d73e219ffdfdb51b",
+    "branch": "codex/merkle-pir-baselines",
+    "build_type": "Benchmark",
+    "config": "CONFIG_N2048_K1_COMP",
+    "architecture": "x86_64",
+    "process_architecture": "x86_64",
+    "operating_system": "ProductName:\t\tmacOS;ProductVersion:\t\t15.7.7;BuildVersion:\t\t24G720;",
+    "cpu": "Apple M4",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.6.3.2)",
+    "cmake_version": "cmake version 4.3.3",
+    "hexl_enabled": true,
+    "hexl_version": "1.2.6",
+    "hexl_path": "/Users/little_sun/Desktop/little_sun/26Summer/OnionPIRv2/hexl_install/lib64/cmake/hexl-1.2.6",
+    "rosetta": true,
+    "non_native_label": "x86_64 + Intel HEXL under Rosetta 2 on Apple M4; non-native result"
+  },
+  "paper_alignment": {
+    "paper": "OnionPIRv2: Efficient Single-Server PIR (2025/1142)",
+    "revision": "2025-1142.pdf",
+    "sections": ["4.1", "4.2", "4.3"],
+    "poly_degree": 2048,
+    "log_q": 58,
+    "log_t": 13,
+    "log_q_prime": 22,
+    "L_KEY": 10,
+    "L_EP": 6,
+    "L_KS": 8,
+    "sigma": 2.550000,
+    "estimated_security_bits": 117.000000,
+    "reference_hardware": "Intel Xeon Platinum 8358 2.60 GHz, Ubuntu 22.04, AVX-512",
+    "local_result_is_hardware_replication": false
+  },
+  "workload": {
+    "leaf_count": 16777216,
+    "tree_height": 24,
+    "node_bytes": 32,
+    "nodes_per_plaintext": 96,
+    "paper_row": "1 GB",
+    "warmups": 3,
+    "measured_trials": 32,
+    "trial_seed": 18307099591618673218,
+    "warmup_leaf_indices": [9930502, 634363, 9255744],
+    "trial_leaf_indices": [11520127, 380408, 15992773, 4244969, 931588, 2861177, 9018575, 15302479, 3437706, 11541114, 13744052, 14370217, 11391876, 6368000, 4447648, 8801783, 13353877, 3229988, 1559226, 165428, 3690667, 12785443, 4607009, 13040878, 7638677, 12079759, 11893160, 7645130, 6782132, 13702342, 15274381, 10507727],
+    "optional_workloads": [
+      {"leaf_count": 134217728, "tree_height": 27, "paper_row": "8 GB", "status": "not_requested", "skip_reason": "optional 8 GB run flag was not set"}
+    ]
+  },
+  "cases": [
+    {
+      "name": "standard_onionpir",
+      "correctness_passed": true,
+      "pir_call_count": 1,
+      "raw_dataset_bytes": 1073741760,
+      "paper_plaintext_database_bytes": 1073743872,
+      "logical_padded_database_bytes": 1074266112,
+      "paper_plaintext_scan_bytes": 1073743872,
+      "logical_padded_scan_bytes": 1074266112,
+      "raw_application_scan_bytes": 1073743872,
+      "physical_preprocessed_storage_bytes": 5729419264,
+      "setup_ms": 5798.213833,
+      "client_query_ms": 0.085868,
+      "server_compute_ms": 1444.205458,
+      "response_serialize_ms": 0.064781,
+      "response_load_decrypt_extract_ms": 0.235053,
+      "local_online_pipeline_ms": 1444.591160,
+      "online_query_bytes_modeled": 14880,
+      "online_response_bytes_actual": 11264,
+      "online_total_bytes_mixed": 26144,
+      "helper_key_bytes_modeled": 1488000,
+      "first_session_total_bytes_mixed": 1514144,
+      "paper_server_throughput_MBps": 709.041742,
+      "paper_scan_throughput_MBps": 709.041742,
+      "padded_scan_throughput_MBps": 709.386600,
+      "useful_response_bytes": 3072,
+      "useful_response_throughput_Bps": 2127.121168
+    }
+  ]
+}
