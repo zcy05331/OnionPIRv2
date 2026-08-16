@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import subprocess
-import sys
 import os
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,10 +54,12 @@ def main():
     )
     parser.add_argument(
         "-t", "--test", default="pir",
-        help="Test to run (default: pir). Options: pir, bfv, serial, ext_prod, "
-             "ext_prod_mux, fst_dim, batch_decomp, fast_expand, raw_pt_ct, "
-             "decrypt_mod_q, mod_switch, db_shape, bv_ks, cpu_info, "
-             "merkle_benchmarks",
+        help="Test to run (default: pir). Options: pir, bfv, ext_prod, "
+             "ext_prod_mux, fst_dim, fast_expand, decrypt_mod_q, mod_switch, "
+             "db_shape, runtime_layout, merkle_baseline, server_loader, "
+             "shared_session, merkle_benchmark_stats, merkle_integration, "
+             "bv_ks, cpu_info, hexl_ntt, utils_arith, noise_sampling, "
+             "rlwe_enc, barrett, plan_params, merkle_benchmarks",
     )
     parser.add_argument(
         "-o", "--output", metavar="FILE",

@@ -12,9 +12,13 @@ static std::string pt_to_string(const RlwePt &pt) {
     if (!first) s += " + ";
     first = false;
     char buf[64];
-    if (i - 1 == 0)      std::snprintf(buf, sizeof(buf), "%lX", c);
-    else if (i - 1 == 1) std::snprintf(buf, sizeof(buf), "%lXx", c);
-    else                 std::snprintf(buf, sizeof(buf), "%lXx^%zu", c, i - 1);
+    const auto printable = static_cast<unsigned long long>(c);
+    if (i - 1 == 0)
+      std::snprintf(buf, sizeof(buf), "%llX", printable);
+    else if (i - 1 == 1)
+      std::snprintf(buf, sizeof(buf), "%llXx", printable);
+    else
+      std::snprintf(buf, sizeof(buf), "%llXx^%zu", printable, i - 1);
     s += buf;
   }
   return first ? "0" : s;

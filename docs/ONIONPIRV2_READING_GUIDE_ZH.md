@@ -1678,14 +1678,11 @@ throughput = logical_database_MB / average_server_time_seconds
 
 | 严重度 | 漂移 | 证据 | 阅读/运行影响 |
 |---:|---|---|---|
-| 高 | <code>--no-compress</code> 实际未生效 | <a href="../run.py#L52">run.py</a> 接收并传递参数；<a href="../src/main.cpp#L11">main</a> 不解析它 | 无法用该 flag 得到未压缩协议基线 |
+| 高 | <code>--no-compress</code> 实际未生效 | <a href="../run.py#L52">run.py</a> 接收并传递参数；<a href="../src/main.cpp#L106">main</a> 为兼容旧调用而接受该参数，但当前只有一条 query packing 路径 | 无法用该 flag 得到未压缩协议基线 |
 | 高 | README 声称 <code>-DUSE_HEXL=OFF</code> 有 scalar fallback | <a href="../CMakeLists.txt#L26">CMake</a> 只控制 find/link；多个 source 仍无条件 include 和调用 HEXL | 当前源码没有可见的完整 no-HEXL compile path |
-| 高 | README 声称可用 <code>-DHEXL_DIR</code> 覆盖路径 | <a href="../CMakeLists.txt#L32">CMakeLists</a> 在项目内无条件设置硬编码集群路径 | 命令行 cache value 可能被同作用域 normal variable 遮蔽；复现前应核对 configure log |
 | 中 | NTT cache 注释写成 thread-local | <a href="../src/utils.cpp#L20">注释与声明</a>：实际是普通 <code>static unordered_map</code> | 不能依据注释推断线程安全 |
 | 中 | GSW header 把 key 写成 RGSW(-s) | <a href="../src/includes/gsw.h#L64">gsw.h</a>；<a href="../src/client.cpp#L23">生成代码</a>加密的是 s | 阅读应以 v2 论文和实际 <code>plain_to_gsw(sk)</code> 为准 |
 | 中 | 批量脚本包含不存在的 config alias | <a href="../scripts/run_all_combos.sh#L49">run_all_combos.sh</a> 与 <a href="../run.py#L15">CONFIG_ALIASES</a> | 脚本跑到 <code>k2_rns</code> / <code>n4096_k2_rns</code> 会被 argparse 拒绝 |
-| 低 | run.py 的 test help 含旧名称 | <a href="../run.py#L57">help text</a> 与 <a href="../src/tests/run_test.cpp#L6">真实 dispatcher</a> | <code>serial</code>、<code>batch_decomp</code>、<code>raw_pt_ct</code> 等会成为 Unknown test |
-| 低 | experiments 默认值文字不一致 | <a href="../run.py#L71">default=5，但 help 写 10</a> | 不影响执行，影响实验记录解释 |
 | 低 | 编译器环境描述不唯一 | README 记录 GCC 11.4；CMake 注释举例 GCC 13.3 | 性能复现必须记录实际 compiler、HEXL 和 CPU，而不能只写“按 README” |
 
 这些漂移不改变第 8–12 节描述的核心密码计算链，但会影响构建、自动化、并发假设和实验复现。
@@ -1735,7 +1732,7 @@ ACTIVE_CONFIG
 CMAKE_BUILD_TYPE
 ~~~
 
-当前 CMake 含硬编码 HEXL 路径，且 no-HEXL fallback 的 README 说明与 source 不一致。因此第一次复现应先读取 CMake configure output，确认实际找到的 HEXL；不要把 <code>-DUSE_HEXL=OFF</code> 当成已验证的逃生路径。
+当前 CMake 默认使用仓库内的 HEXL 路径，并允许通过 <code>-DHEXL_DIR</code> 覆盖；no-HEXL fallback 的 README 说明仍与 source 不一致。因此第一次复现应先读取 CMake configure output，记录实际解析的 HEXL 路径；不要把 <code>-DUSE_HEXL=OFF</code> 当成已验证的逃生路径。
 
 ### 18.2 推荐验证顺序
 
