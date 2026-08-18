@@ -162,6 +162,7 @@ enum class BenchmarkCaseSelection {
   all,
   standard_onionpir,
   merkle_paths,
+  merkle_layerwise,
 };
 
 struct MerkleBenchmarkOptions {

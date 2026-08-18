@@ -968,12 +968,14 @@ std::vector<BenchmarkCaseResult> execute_case_set(
     const std::string &name_suffix = "") {
   if (selection != BenchmarkCaseSelection::all &&
       selection != BenchmarkCaseSelection::standard_onionpir &&
-      selection != BenchmarkCaseSelection::merkle_paths) {
+      selection != BenchmarkCaseSelection::merkle_paths &&
+      selection != BenchmarkCaseSelection::merkle_layerwise) {
     throw std::invalid_argument("Unknown benchmark case selection");
   }
 
   std::vector<BenchmarkCaseResult> results;
-  if (selection != BenchmarkCaseSelection::merkle_paths) {
+  if (selection == BenchmarkCaseSelection::all ||
+      selection == BenchmarkCaseSelection::standard_onionpir) {
     BenchmarkCaseExecution standard =
         run_standard_case(workload, reference, trials);
     standard.result.name += name_suffix;
@@ -983,6 +985,14 @@ std::vector<BenchmarkCaseResult> execute_case_set(
     if (selection == BenchmarkCaseSelection::standard_onionpir) {
       return results;
     }
+  }
+
+  if (selection == BenchmarkCaseSelection::merkle_layerwise) {
+    BenchmarkCaseExecution layerwise =
+        run_merkle_layerwise_case(workload, reference, trials);
+    layerwise.result.name += name_suffix;
+    results.push_back(std::move(layerwise.result));
+    return results;
   }
 
   BenchmarkCaseExecution flat =

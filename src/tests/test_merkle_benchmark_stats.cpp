@@ -204,6 +204,16 @@ void PirTest::test_merkle_benchmark_stats() {
                    paths_only_report.cases[1].name == "merkle_layerwise",
                "paths-only benchmark did not isolate both path cases");
 
+  MerkleBenchmarkOptions layerwise_only_options = standard_only_options;
+  layerwise_only_options.case_selection =
+      BenchmarkCaseSelection::merkle_layerwise;
+  const BenchmarkReport layerwise_only_report =
+      run_merkle_benchmark_suite(layerwise_only_options);
+  require_test(layerwise_only_report.cases.size() == 1,
+               "layerwise-only selection must execute exactly one case");
+  require_test(layerwise_only_report.cases[0].name == "merkle_layerwise",
+               "layerwise-only selection must exclude Standard and Flat");
+
   bool rejected_ungated_large_primary = false;
   try {
     MerkleBenchmarkOptions unsafe_options;

@@ -38,7 +38,7 @@ python run.py [options]
 | `--build-only` | Build without running |
 | `--leaf-count N` | Merkle benchmark leaf count; power of two (default: `2^24`) |
 | `--benchmark-json FILE` | Write structured Merkle benchmark output |
-| `--benchmark-case NAME` | Run `all`, only `standard_onionpir`, or only `merkle_paths` (default: `all`) |
+| `--benchmark-case NAME` | Run `all`, only `standard_onionpir`, both `merkle_paths`, or only `merkle_layerwise` (default: `all`) |
 | `--run-optional-8gb` | Attempt the resource-gated `2^27`-leaf workload |
 | `-h`, `--help` | Show help message |
 
@@ -95,8 +95,10 @@ different ID; all three cases reuse that same schedule for paired comparison.
 Set `BENCHMARK_CASE=standard_onionpir` when repeating only the Standard case;
 the runner returns before allocating or executing either Merkle-path baseline.
 Set `BENCHMARK_CASE=merkle_paths` to run paired Flat and Layerwise trials
-without constructing or timing Standard. JSON preserves every measured
-server-time/throughput sample plus population and sample variance.
+without constructing or timing Standard. Set
+`BENCHMARK_CASE=merkle_layerwise` to run Layerwise alone without constructing
+or timing Standard or Flat. JSON preserves every measured server-time/
+throughput sample plus population and sample variance.
 The top-level throughput remains database bytes divided by mean server time,
 while the per-trial throughput statistics use the arithmetic mean of the
 individual trial throughputs.

@@ -87,7 +87,8 @@ def main():
     )
     parser.add_argument(
         "--benchmark-case",
-        choices=("all", "standard_onionpir", "merkle_paths"),
+        choices=("all", "standard_onionpir", "merkle_paths",
+                 "merkle_layerwise"),
         default="all",
         help="Merkle benchmark case to run (default: all)",
     )

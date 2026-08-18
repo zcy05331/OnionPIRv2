@@ -96,10 +96,12 @@ int main(int argc, char *argv[]) {
           benchmark_case = BenchmarkCaseSelection::standard_onionpir;
         } else if (value == "merkle_paths") {
           benchmark_case = BenchmarkCaseSelection::merkle_paths;
+        } else if (value == "merkle_layerwise") {
+          benchmark_case = BenchmarkCaseSelection::merkle_layerwise;
         } else {
           throw std::invalid_argument(
               "--benchmark-case must be all, standard_onionpir, or "
-              "merkle_paths");
+              "merkle_paths, or merkle_layerwise");
         }
       } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
         run_optional_8gb = true;
