@@ -34,6 +34,19 @@ public:
   // 其中 key setup 和 response serialization 位于本函数边界之外。
   RlweCt make_query(const size_t client_id, RlweCt &query);
 
+  // Public Algorithm 2 ExpandBFV entry: unpack one coefficient-form full-q
+  // packed query into its useful-leaf constants under this server's layout
+  // (fst_dim_sz + L_EP * num_other_dims leaves, capacity 2^expansion_height).
+  // The input ciphertext is only read. Consumers that need RGSW selectors run
+  // their own completion pass over the returned gadget rows (tree PIR:
+  // unpack_tree_query); make_query keeps using the internal path directly.
+  std::vector<RlweCt> expand_query(size_t client_id, RlweCt &query) const;
+
+  // Read-only view of the layout this server was constructed on, so external
+  // composers (tree PIR unpack) can reject a shape-mismatched server before
+  // doing any homomorphic work.
+  inline const PirParams &get_params() const { return pir_params_; }
+
   // 只序列化 small-q response ciphertext：先 c0 后 c1，每个 coefficient
   // 固定写 small_q_width bits，bit order 为 LSB-first。这个 research prototype
   // format 无 authentication/integrity；对应 reader side 不检查 payload 后

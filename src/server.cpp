@@ -611,6 +611,15 @@ RlweCt PirServer::evaluate_other_dim(std::vector<RlweCt> &mid_db, std::vector<GS
   // `other_dim_sz` 不一定是 perfect power of two。virtual selector tree 高度是 h；
   // `perfect_size` 是 ragged leaves 上方第一个 complete level 的大小。
   const size_t perfect_size = (1 << (h - 1)); // second to last level size
+
+  // Complete-tree layouts always satisfy other_dim_sz >= 2^(h-1); anything
+  // smaller (e.g. an expansion-only with_query_shape view) would underflow
+  // last_level_sz below and corrupt mid_db, so fail loudly instead.
+  if (other_dim_sz < perfect_size) {
+    throw std::invalid_argument(
+        "evaluate_other_dim: layout has fewer candidates than its selector "
+        "tree; query-shape views cannot answer make_query");
+  }
   
   // 在 deepest/ragged level，`last_level_sz` 是 virtual tree 中真实拥有 sibling 的
   // leaves 数量；`offset` 之前的 leaves 在这一层没有 sibling，会原位保留。
@@ -804,6 +813,11 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
   return std::vector<RlweCt>(
       std::make_move_iterator(cts.begin() + capacity),
       std::make_move_iterator(cts.begin() + capacity + useful_cnt));
+}
+
+std::vector<RlweCt> PirServer::expand_query(size_t client_id,
+                                            RlweCt &query) const {
+  return fast_expand_qry(client_id, query);
 }
 
 void PirServer::set_client_bv_galois_key(const size_t client_id, bvks::BvGaloisKeys bv_keys) {

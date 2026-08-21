@@ -53,9 +53,10 @@ public:
   int noise_budget(const RlweCt &ct);
 
 
-  // Fresh encryption of zero under the data modulus Q. Testing only:
-  // used to measure the baseline initial noise budget without the
-  // gadget-injection artifacts of fast_generate_query.
+  // Fresh encryption of zero under the data modulus Q in coefficient form,
+  // with fresh (a, e) randomness per call. Two consumers: noise-baseline
+  // tests, and external query-packing helpers (tree PIR) that add their own
+  // message constants on top instead of re-implementing the encoder.
   RlweCt fresh_zero_ct();
 
   // 仅 response 的 PirServer::save_resp_to_stream inverse：先读 c0 再读 c1，

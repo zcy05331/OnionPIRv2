@@ -38,6 +38,17 @@ struct PirLayoutConfig {
   bool fst_dim_pow2;
 };
 
+// Direct packed-query shape: exactly fst_dim_sz first-dimension slots plus
+// num_selector_bits gadget-row groups under a 2^expansion_height capacity.
+// Unlike PirLayoutConfig this is not derived from a plaintext target, so
+// shapes the database planner would never pick (e.g. the tree query's
+// N0 + (b + r) * L_EP layout) can be expressed exactly.
+struct PirQueryShapeConfig {
+  size_t fst_dim_sz;
+  size_t num_selector_bits;
+  size_t expansion_height;
+};
+
 // ================== CLASS DEFINITIONS ==================
 class PirParams {
 public:
@@ -45,6 +56,13 @@ public:
   PirParams(const PirParams &pir_params) = default;
 
   PirParams with_layout(const PirLayoutConfig &layout) const;
+  // Expansion-only view for packed-query processing: sets fst_dim_sz_,
+  // num_dims_ = 1 + num_selector_bits and expansion_height_ verbatim while
+  // keeping every scheme field. num_pt_ collapses to fst_dim_sz because this
+  // view carries no database: it is valid for query packing, fast_expand_qry
+  // and session-key checks, but must not be used to load a database or answer
+  // make_query.
+  PirParams with_query_shape(const PirQueryShapeConfig &shape) const;
   bool scheme_compatible(const PirParams &other) const;
 
   // ================== getters ==================

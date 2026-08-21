@@ -133,6 +133,39 @@ PirParams PirParams::with_layout(const PirLayoutConfig &layout) const {
   return result;
 }
 
+PirParams PirParams::with_query_shape(const PirQueryShapeConfig &shape) const {
+  constexpr size_t max_expansion_height =
+      std::bit_width(DBConsts::PolyDegree) - 1;
+  if (shape.expansion_height > max_expansion_height) {
+    throw std::invalid_argument(
+        "PirParams: query shape exceeds the ring automorphism capacity");
+  }
+  if (shape.fst_dim_sz == 0) {
+    throw std::invalid_argument(
+        "PirParams: query shape needs a positive first dimension");
+  }
+  // Division-based bound so l_ep_ * num_selector_bits cannot wrap before the
+  // comparison: fst_dim_sz + l_ep_ * num_selector_bits must fit the capacity.
+  const size_t capacity = size_t{1} << shape.expansion_height;
+  if (shape.fst_dim_sz > capacity ||
+      shape.num_selector_bits >
+          (capacity - shape.fst_dim_sz) / l_ep_) {
+    throw std::invalid_argument(
+        "PirParams: query shape does not fit the expansion capacity");
+  }
+
+  PirParams result(*this);
+  result.fst_dim_sz_ = shape.fst_dim_sz;
+  result.num_dims_ = 1 + shape.num_selector_bits;
+  result.expansion_height_ = shape.expansion_height;
+  // No database behind this view; keep the plaintext count minimal so an
+  // accidental PirServer allocation stays small and get_other_dim_sz() = 1
+  // signals "no remaining-dimension database".
+  result.num_pt_ = shape.fst_dim_sz;
+  result.target_num_pt_ = shape.fst_dim_sz;
+  return result;
+}
+
 bool PirParams::scheme_compatible(const PirParams &other) const {
   const bool same_composite =
       composite_rns_.enabled == other.composite_rns_.enabled &&
