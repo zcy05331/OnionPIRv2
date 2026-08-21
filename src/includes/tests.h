@@ -52,6 +52,11 @@ class PirTest {
 
     // ======================== Other tests ========================
     void test_fast_expand_query();
+    // ======================== Tree PIR tests ========================
+    // (gamma, alpha, beta) index math and public level plans (pure arithmetic).
+    void test_tree_index();
+    // Packed tree query -> ExpandBFV -> order/scale -> RGSW -> isolated CMux.
+    void test_tree_query();
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();
