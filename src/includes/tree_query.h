@@ -78,12 +78,15 @@ struct ExpandedTreeQuery {
 };
 
 // Algorithm "QueryUnpack" (sec. 9): run the existing coefficient-expansion
-// tree with useful-leaf pruning, keep the alpha range as BFV, and convert the
-// selector groups to RGSW. `server` must have been constructed on
+// tree with useful-leaf pruning, keep the alpha range as BFV, and complete
+// the selector groups to RGSW via PirServer::complete_selectors — the same
+// implementation the flat make_query path uses, so the row layout cannot
+// drift between the two. `server` must have been constructed on
 // tree_query_expansion_params(tree, scheme) and hold the client's session
 // keys; a shape- or scheme-mismatched server is rejected before any
-// homomorphic work. The packed query is only read.
-ExpandedTreeQuery unpack_tree_query(const PirServer &server,
+// homomorphic work. The packed query is only read; the server is non-const
+// because completion reuses its conversion state.
+ExpandedTreeQuery unpack_tree_query(PirServer &server,
                                     const PirParams &scheme,
                                     const TreePirParams &tree,
                                     size_t client_id, RlweCt &query);

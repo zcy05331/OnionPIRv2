@@ -195,7 +195,7 @@ RlweCt make_tree_query(PirClient &client, const PirParams &scheme,
   return query;
 }
 
-ExpandedTreeQuery unpack_tree_query(const PirServer &server,
+ExpandedTreeQuery unpack_tree_query(PirServer &server,
                                     const PirParams &scheme,
                                     const TreePirParams &tree,
                                     size_t client_id, RlweCt &query) {
@@ -212,37 +212,29 @@ ExpandedTreeQuery unpack_tree_query(const PirServer &server,
   // Expansion (sec. 9.1): the pruned heap walk returns the w useful leaves in
   // logical order — alpha one-hot first, then one ell-row group per selector.
   std::vector<RlweCt> expanded = server.expand_query(client_id, query);
-  const size_t ell = tree.ell_beta;
   if (expanded.size() != tree.w) {
     throw std::runtime_error(
         "unpack_tree_query expansion returned an unexpected leaf count");
   }
 
+  // Conversion (sec. 9.2): the shared server-side completion pass slices the
+  // b + r selector groups and completes each into RGSW; the tree layer only
+  // splits the result back into its beta and gamma coordinates.
+  std::vector<GSWCt> selectors =
+      server.complete_selectors(client_id, expanded);
+  if (selectors.size() != tree.b + tree.r) {
+    throw std::runtime_error(
+        "unpack_tree_query completion returned an unexpected selector count");
+  }
+
   ExpandedTreeQuery result;
   result.alpha.assign(std::make_move_iterator(expanded.begin()),
                       std::make_move_iterator(expanded.begin() + tree.N0));
-
-  // Conversion (sec. 9.2): complete each group's top rows into a full RGSW
-  // selector with the client's registered RGSW(s) key, exactly as the flat
-  // make_query path does for its remaining dimensions.
-  GSWEval key_gsw(scheme, scheme.get_l_key(), scheme.get_base_log2_key());
-  const GSWCt &completion_key = server.client_session_keys(client_id)->gsw_key;
-  const auto convert_group = [&](size_t group_index) {
-    std::vector<RlweCt> rows(
-        expanded.begin() + tree.N0 + group_index * ell,
-        expanded.begin() + tree.N0 + (group_index + 1) * ell);
-    GSWCt selector;
-    key_gsw.query_to_gsw(std::move(rows), completion_key, selector);
-    return selector;
-  };
-
-  result.beta_selectors.reserve(tree.b);
-  for (size_t u = 0; u < tree.b; ++u) {
-    result.beta_selectors.push_back(convert_group(u));
-  }
-  result.gamma_selectors.reserve(tree.r);
-  for (size_t v = 0; v < tree.r; ++v) {
-    result.gamma_selectors.push_back(convert_group(tree.b + v));
-  }
+  result.beta_selectors.assign(
+      std::make_move_iterator(selectors.begin()),
+      std::make_move_iterator(selectors.begin() + tree.b));
+  result.gamma_selectors.assign(
+      std::make_move_iterator(selectors.begin() + tree.b),
+      std::make_move_iterator(selectors.end()));
   return result;
 }

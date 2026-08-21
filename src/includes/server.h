@@ -42,6 +42,15 @@ public:
   // unpack_tree_query); make_query keeps using the internal path directly.
   std::vector<RlweCt> expand_query(size_t client_id, RlweCt &query) const;
 
+  // Algorithm 3 completion over an expand_query output: selector i's top rows
+  // live at [fst_dim_sz + i*L_EP, fst_dim_sz + (i+1)*L_EP) and are completed
+  // into one full RGSW ciphertext with the client's registered RGSW(s) key.
+  // Single source for the expanded-row layout convention: make_query and the
+  // tree unpack path both call this, so the two cannot drift apart. Non-const
+  // because completion reuses this server's GSWEval conversion state.
+  std::vector<GSWCt> complete_selectors(size_t client_id,
+                                        const std::vector<RlweCt> &expanded);
+
   // Read-only view of the layout this server was constructed on, so external
   // composers (tree PIR unpack) can reject a shape-mismatched server before
   // doing any homomorphic work.

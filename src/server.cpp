@@ -820,6 +820,40 @@ std::vector<RlweCt> PirServer::expand_query(size_t client_id,
   return fast_expand_qry(client_id, query);
 }
 
+std::vector<GSWCt> PirServer::complete_selectors(
+    size_t client_id, const std::vector<RlweCt> &expanded) {
+  // Algorithm 3 / QueryUnpack completion. fast_expand_qry returns:
+  //   [0, fst_dim_sz)                          first-dimension BFV vector
+  //   [fst_dim_sz + (i-1)*L_EP, fst_dim_sz + i*L_EP)  selector i top half
+  // Each selector contributes exactly L_EP BFV rows, aligned with the
+  // MSB-first gadget order used by QueryPack. The completion key is RGSW(s)
+  // generated with L_KEY; query_to_gsw uses it only to derive the bottom
+  // half, so the resulting selector has 2*L_EP rows for external products.
+  const size_t l_ep = pir_params_.get_l();
+  const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();
+  const size_t num_selectors = pir_params_.get_num_dims() - 1;
+  std::vector<GSWCt> gsw_vec(num_selectors);
+  if (num_selectors == 0) return gsw_vec;
+  if (expanded.size() < fst_dim_sz + num_selectors * l_ep) {
+    throw std::invalid_argument(
+        "complete_selectors expects one expanded row group per selector");
+  }
+  const auto session_it = client_sessions_.find(client_id);
+  const GSWCt &completion_key =
+      session_it != client_sessions_.end()
+          ? session_it->second->gsw_key
+          : client_gsw_keys_.at(client_id);
+  for (size_t i = 1; i <= num_selectors; i++) {
+    std::vector<RlweCt> lwe_vector;
+    lwe_vector.reserve(l_ep);
+    for (size_t k = 0; k < l_ep; ++k) {
+      lwe_vector.push_back(expanded[fst_dim_sz + (i - 1) * l_ep + k]);
+    }
+    key_gsw_.query_to_gsw(lwe_vector, completion_key, gsw_vec[i - 1]);
+  }
+  return gsw_vec;
+}
+
 void PirServer::set_client_bv_galois_key(const size_t client_id, bvks::BvGaloisKeys bv_keys) {
   client_bv_galois_keys_[client_id] = std::move(bv_keys);
 }
@@ -873,36 +907,10 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
 
   // 阶段 2 / Algorithm 3 completion：把 expanded BFV selector rows 转成完整
   // RGSW ciphertexts；bottom half 由已注册到 server 的 client RGSW(s) key 补齐。
-  // Reconstruct Algorithm 3 / QueryUnpack RGSW selectors from the expanded BFV
-  // stream. fast_expand_qry returns:
-  //   [0, N0)                         first-dimension BFV vector
-  //   [N0 + (i-1)*L_EP, N0 + i*L_EP) selector top half for that later dim
-  // Each later dimension contributes exactly L_EP BFV ciphertexts, already
-  // aligned with the MSB-first gadget rows used by QueryPack/RGSW layout.
+  // Row layout 与 completion 逻辑统一在 complete_selectors 中（tree unpack
+  // 路径也走同一份实现）。
   TIME_START(CONVERT_TIME);
-  const size_t l_ep = pir_params_.get_l();
-  std::vector<GSWCt> gsw_vec(pir_params_.get_num_dims() - 1); // GSWCt containers；prose 语义是 RGSW selectors
-  if (pir_params_.get_num_dims() != 1) {  // if we do need futher dimensions
-    const auto session_it = client_sessions_.find(client_id);
-    const GSWCt &completion_key =
-        session_it != client_sessions_.end()
-            ? session_it->second->gsw_key
-            : client_gsw_keys_.at(client_id);
-    for (size_t i = 1; i < pir_params_.get_num_dims(); i++) {
-      // Copy the selector's top L_EP rows out of the expanded vector. The
-      // completion key stored in client_gsw_keys_ is RGSW(s) and was generated
-      // with L_KEY; query_to_gsw uses it only to derive the bottom half. The
-      // resulting selector consumed by data external products has 2*L_EP rows.
-      std::vector<RlweCt> lwe_vector;
-      lwe_vector.reserve(l_ep);
-      for (size_t k = 0; k < l_ep; ++k) {
-        auto ptr = pir_params_.get_fst_dim_sz() + (i - 1) * l_ep + k;
-        lwe_vector.push_back(query_vector[ptr]);
-      }
-      // 用 expanded BFV top rows completion 成完整 RGSW selector ciphertext。
-      key_gsw_.query_to_gsw(lwe_vector, completion_key, gsw_vec[i - 1]);
-    }
-  }
+  std::vector<GSWCt> gsw_vec = complete_selectors(client_id, query_vector);
   TIME_END(CONVERT_TIME);
 
   // ========================== Evaluations ==========================
