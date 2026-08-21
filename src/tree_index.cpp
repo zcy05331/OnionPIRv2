@@ -22,6 +22,26 @@ size_t exact_log2(size_t value, const char *name) {
   return static_cast<size_t>(std::bit_width(value)) - 1;
 }
 
+// Overflow-checked w = N0 + ell_beta*b + ell_gamma*r (blueprint sec. 3.2
+// checked arithmetic). A wrapped value could otherwise pass every later
+// check with a nonsense small w/W while the real gadget lengths stay huge.
+size_t checked_packed_width(size_t N0, size_t ell_beta, size_t b,
+                            size_t ell_gamma, size_t r) {
+  const auto mul = [](size_t x, size_t y) {
+    if (x != 0 && y > std::numeric_limits<size_t>::max() / x) {
+      throw std::invalid_argument("TreePirParams: packed width overflows");
+    }
+    return x * y;
+  };
+  const auto add = [](size_t x, size_t y) {
+    if (y > std::numeric_limits<size_t>::max() - x) {
+      throw std::invalid_argument("TreePirParams: packed width overflows");
+    }
+    return x + y;
+  };
+  return add(N0, add(mul(ell_beta, b), mul(ell_gamma, r)));
+}
+
 }  // namespace
 
 TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n,
@@ -54,7 +74,11 @@ TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n,
 
   params.ell_beta = ell_beta;
   params.ell_gamma = ell_gamma;
-  params.w = params.N0 + ell_beta * params.b + ell_gamma * params.r;
+  params.w = checked_packed_width(params.N0, ell_beta, params.b, ell_gamma,
+                                  params.r);
+  // Bounding w by n before bit_ceil keeps the ceiling representable; any
+  // shape violating this would fail the W <= n gate anyway.
+  require(params.w <= params.n, "packed width exceeds the ring degree");
   params.W = std::bit_ceil(params.w);
   params.h_q = static_cast<size_t>(std::bit_width(params.W)) - 1;
 
@@ -97,9 +121,11 @@ void validate_tree_params(const TreePirParams &params) {
 
   require(params.ell_beta > 0 && params.ell_gamma > 0,
           "gadget lengths must be positive");
-  require(params.w == params.N0 + params.ell_beta * params.b +
-                          params.ell_gamma * params.r,
+  require(params.w == checked_packed_width(params.N0, params.ell_beta,
+                                           params.b, params.ell_gamma,
+                                           params.r),
           "w must equal N0 + ell_beta*b + ell_gamma*r");
+  require(params.w <= params.n, "packed width exceeds the ring degree");
   require(params.W == std::bit_ceil(params.w),
           "W must be the next power of two of w");
   require(params.h_q == static_cast<size_t>(std::bit_width(params.W)) - 1,

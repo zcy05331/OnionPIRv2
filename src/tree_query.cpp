@@ -45,9 +45,20 @@ TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a,
   // existing gsw_gadget table and query_to_gsw completion; a distinct gamma
   // gadget length would need its own conversion path.
   const std::vector<uint64_t> &mods = scheme.get_rns_mods();
-  return make_tree_pir_params(L, a, scheme.get_poly_degree(), scheme.get_l(),
-                              scheme.get_l(), scheme.get_plain_mod(),
-                              std::vector<uint64_t>(mods.begin(), mods.end()));
+  TreePirParams params = make_tree_pir_params(
+      L, a, scheme.get_poly_degree(), scheme.get_l(), scheme.get_l(),
+      scheme.get_plain_mod(),
+      std::vector<uint64_t>(mods.begin(), mods.end()));
+  // Runtime capability bound: session keys carry substitutions only up to the
+  // scheme's expansion height. W <= n alone still admits h_q up to log2 n, so
+  // a taller-but-otherwise-legal shape must fail here, at the factory, not
+  // later at set_client_session_keys after the client already packed a query.
+  if (params.h_q > scheme.get_expan_height()) {
+    throw std::invalid_argument(
+        "tree query expansion height exceeds the scheme's session-key "
+        "coverage");
+  }
+  return params;
 }
 
 PirParams tree_query_expansion_params(const TreePirParams &tree,

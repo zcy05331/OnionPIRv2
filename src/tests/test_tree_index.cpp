@@ -170,6 +170,13 @@ void PirTest::test_tree_index() {
                }),
                "accepted W above the ring degree");
   require_test(throws_invalid_argument([&] {
+                 // ell*(b + r) = 16 * 2^60 wraps to 0 mod 2^64; unchecked
+                 // arithmetic would fold w back to N0 and pass every gate.
+                 (void)make_tree_pir_params(19, 3, 2048, size_t{1} << 60,
+                                            size_t{1} << 60, 17, mods);
+               }),
+               "accepted a wrapping packed width");
+  require_test(throws_invalid_argument([&] {
                  (void)make_tree_pir_params(6, 1, 8, 1, 1, 16, mods);
                }),
                "accepted even plaintext modulus");
@@ -213,6 +220,15 @@ void PirTest::test_tree_index() {
     require_test(bound.w == 86 && bound.W == 128 && bound.h_q == 7,
                  "blueprint shape-test packed width");
   }
+  // Runtime capability bound: N0 = 2^10 gives w > 1024, so h_q = 11 stays
+  // within W <= n yet exceeds the scheme's session-key expansion height (10).
+  // The scheme-bound factory must reject it instead of letting the failure
+  // surface later at set_client_session_keys.
+  require_test(throws_invalid_argument([&] {
+                 (void)make_tree_pir_params_for_scheme(bound.r + 10, 10,
+                                                       scheme);
+               }),
+               "accepted an expansion height beyond the session keys");
   exhaust_config(make_tree_pir_params(13, 1, 2048, scheme.get_l(),
                                       scheme.get_l(), scheme.get_plain_mod(),
                                       {scheme.get_rns_mods()[0]}));
