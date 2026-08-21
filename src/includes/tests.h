@@ -57,6 +57,8 @@ class PirTest {
     void test_tree_index();
     // Packed tree query -> ExpandBFV -> order/scale -> RGSW -> isolated CMux.
     void test_tree_query();
+    // Milestone 2: level packing, alpha pyramid, SelectLevel == D_l[p_l].
+    void test_tree_select();
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();
