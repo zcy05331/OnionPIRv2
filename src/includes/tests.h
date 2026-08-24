@@ -59,6 +59,14 @@ class PirTest {
     void test_tree_query();
     // Milestone 2: level packing, alpha pyramid, SelectLevel == D_l[p_l].
     void test_tree_select();
+    // Milestone 3: MulXPow oracle, RotSelect, PrivateRotateLevel alignment.
+    void test_tree_rotate();
+    // Milestone 3: projection map for every depth plus the rotate+project gate.
+    void test_tree_project();
+    // Milestone 4: full path pipeline, chunk packing, client decode.
+    void test_tree_e2e();
+    // Timed MVP path benchmark at the baseline workload scale (2^24 leaves).
+    void test_tree_benchmark();
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();
