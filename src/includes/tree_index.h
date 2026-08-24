@@ -56,6 +56,15 @@ TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n,
                                    uint64_t t,
                                    std::vector<uint64_t> rns_moduli);
 
+// General g (blueprint sec. 23.1): each node occupies g coefficient slots,
+// rho = n/g records fit one plaintext, and r = log2(rho). g must be a power
+// of two so the gamma bit decomposition and projection depths keep their
+// power-of-two structure; g = 1 reproduces the scalar MVP exactly.
+TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n, size_t g,
+                                   size_t ell_beta, size_t ell_gamma,
+                                   uint64_t t,
+                                   std::vector<uint64_t> rns_moduli);
+
 // Blueprint sec. 3.2 hard validation. Throws std::invalid_argument on the
 // first violated constraint; returns normally iff the whole set holds.
 void validate_tree_params(const TreePirParams &params);

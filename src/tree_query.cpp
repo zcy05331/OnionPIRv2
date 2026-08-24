@@ -41,22 +41,34 @@ void require_scheme_binding(const TreePirParams &tree,
 
 TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a,
                                               const PirParams &scheme) {
+  return make_tree_pir_params_for_scheme(L, a, /*g=*/1, scheme);
+}
+
+TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
+                                              const PirParams &scheme) {
+  return make_tree_pir_params_for_scheme(L, a, g, scheme,
+                                         scheme.get_expan_height());
+}
+
+TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
+                                              const PirParams &scheme,
+                                              size_t session_key_height) {
   // ell_beta = ell_gamma = L_EP keeps every selector row compatible with the
   // existing gsw_gadget table and query_to_gsw completion; a distinct gamma
   // gadget length would need its own conversion path.
   const std::vector<uint64_t> &mods = scheme.get_rns_mods();
   TreePirParams params = make_tree_pir_params(
-      L, a, scheme.get_poly_degree(), scheme.get_l(), scheme.get_l(),
+      L, a, scheme.get_poly_degree(), g, scheme.get_l(), scheme.get_l(),
       scheme.get_plain_mod(),
       std::vector<uint64_t>(mods.begin(), mods.end()));
-  // Runtime capability bound: session keys carry substitutions only up to the
-  // scheme's expansion height. W <= n alone still admits h_q up to log2 n, so
-  // a taller-but-otherwise-legal shape must fail here, at the factory, not
-  // later at set_client_session_keys after the client already packed a query.
-  if (params.h_q > scheme.get_expan_height()) {
+  // Runtime capability bound: session keys carry substitutions only up to
+  // the height the caller's session actually registered. W <= n alone still
+  // admits h_q up to log2 n, so a taller-but-otherwise-legal shape must fail
+  // here, at the factory, not later at set_client_session_keys after the
+  // client already packed a query.
+  if (params.h_q > session_key_height) {
     throw std::invalid_argument(
-        "tree query expansion height exceeds the scheme's session-key "
-        "coverage");
+        "tree query expansion height exceeds the session-key coverage");
   }
   return params;
 }

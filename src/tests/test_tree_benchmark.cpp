@@ -16,9 +16,8 @@
 // cryptographic parameters as the 1 GB baseline row. Differences to state
 // with every comparison: g = 1, so each node carries one Z_t scalar instead
 // of the baselines' 32-byte value (payload extension is blueprint sec. 23.1),
-// the whole path returns in ONE main-ring ciphertext instead of 24 separate
-// responses, and the first dimension runs the scalar reference kernel (the
-// optimized matrix kernel is Milestone 6).
+// while the whole path returns in ONE small-q ciphertext (Milestone 5)
+// computed over the NTT-view first dimension (Milestone 6).
 void PirTest::test_tree_benchmark() {
   print_func_name(__FUNCTION__);
   constexpr size_t N = DBConsts::PolyDegree;
@@ -45,12 +44,12 @@ void PirTest::test_tree_benchmark() {
   server.set_client_session_keys(client.get_client_id(), keys);
 
   const auto setup_start = Clock::now();
-  const std::vector<TreeLevelDatabase> levels =
-      preprocess_tree_reference(tree, source);
-  const std::vector<LevelPlan> plans = build_level_plans(tree);
+  const PreprocessedTree db = preprocess_tree_mvp(tree, source, scheme);
   const double setup_ms = ms_since(setup_start);
   size_t total_pt = 0;
-  for (const auto &db : levels) total_pt += db.plaintexts.size();
+  for (const auto &level_db : db.canonical) {
+    total_pt += level_db.plaintexts.size();
+  }
 
   // Distinct deterministic query leaves, same sampler as the baselines.
   constexpr size_t kWarmups = 1;
@@ -59,7 +58,8 @@ void PirTest::test_tree_benchmark() {
       tree.N, kWarmups, kTrials, 0x74726565426e6368ULL);
 
   std::vector<double> query_ms, unpack_ms, path_ms, extract_ms;
-  int final_noise_budget = 0;
+  size_t actual_response_bytes = 0;
+  bool response_small_q = false;
   const auto run_trial = [&](size_t leaf, bool measured) {
     auto start = Clock::now();
     RlweCt query = make_tree_query(client, scheme, tree, leaf);
@@ -72,8 +72,8 @@ void PirTest::test_tree_benchmark() {
 
     start = Clock::now();
     TreePathResponse response =
-        answer_path_mvp(levels, plans, unpacked, server,
-                        client.get_client_id(), tree, scheme);
+        answer_path_mvp(db, unpacked, server, client.get_client_id(), tree,
+                        scheme);
     const double p_ms = ms_since(start);
 
     start = Clock::now();
@@ -94,7 +94,10 @@ void PirTest::test_tree_benchmark() {
       unpack_ms.push_back(u_ms);
       path_ms.push_back(p_ms);
       extract_ms.push_back(e_ms);
-      final_noise_budget = client.noise_budget(response.chunks[0]);
+      response_small_q = response.small_q;
+      std::stringstream wire;
+      actual_response_bytes =
+          server.save_resp_to_stream(response.chunks[0], wire);
     }
   };
 
@@ -106,11 +109,10 @@ void PirTest::test_tree_benchmark() {
   };
   const double server_avg = avg(unpack_ms) + avg(path_ms);
 
-  // Communication model, same conventions as the baseline suite: query and
-  // helper keys are seed-compressed models, the response is the modeled
-  // full-q ciphertext because the same-ring modulus switch is Milestone 5.
+  // Communication accounting, same conventions as the baseline suite: query
+  // and helper keys are seed-compressed models; the response byte count is
+  // read from the real small-q wire codec.
   const size_t query_bytes = scheme.get_BFV_size(true);
-  const size_t response_bytes = scheme.get_BFV_size(false);
   const size_t helper_bytes =
       scheme.with_query_shape({1, 0, std::bit_width(N) - 1})
           .get_bv_galois_key_size(true) +
@@ -132,10 +134,10 @@ void PirTest::test_tree_benchmark() {
   BENCH_PRINT("server total avg " << server_avg << " ms; samples(path):");
   for (double v : path_ms) BENCH_PRINT("  path " << v << " ms");
   BENCH_PRINT("client extract avg " << avg(extract_ms) << " ms");
-  BENCH_PRINT("response noise budget " << final_noise_budget << " bits");
   BENCH_PRINT("communication: query " << query_bytes
-              << " B (modeled, 1 ciphertext), response " << response_bytes
-              << " B (modeled full-q, pre-Milestone-5), helper keys "
+              << " B (modeled, 1 ciphertext), response "
+              << actual_response_bytes << " B (actual wire codec, small_q="
+              << (response_small_q ? "yes" : "no") << "), helper keys "
               << helper_bytes << " B (modeled, "
               << (std::bit_width(N) - 1) << " BV + GSW)");
 }

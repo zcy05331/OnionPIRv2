@@ -820,6 +820,14 @@ std::vector<RlweCt> PirServer::expand_query(size_t client_id,
   return fast_expand_qry(client_id, query);
 }
 
+bool PirServer::switch_response_to_small_q(RlweCt &response) {
+  if (DBConsts::SmallQWidth >= DBConsts::RnsMods[0]) {
+    return false;
+  }
+  mod_switch_inplace(response, pir_params_.get_small_q());
+  return true;
+}
+
 std::vector<GSWCt> PirServer::complete_selectors(
     size_t client_id, const std::vector<RlweCt> &expanded) {
   // Algorithm 3 / QueryUnpack completion. fast_expand_qry returns:

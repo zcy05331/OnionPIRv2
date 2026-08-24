@@ -32,6 +32,20 @@
 // same-ring response. Throws on any blueprint sec. 3.2 violation.
 TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a,
                                               const PirParams &scheme);
+// Same binding with an explicit slots-per-node g (sec. 23.1); the two-arg
+// form is the frozen g = 1 MVP shape.
+TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
+                                              const PirParams &scheme);
+// Full form: the runtime capability bound h_q <= session_key_height is
+// checked against the BV Galois coverage the session actually registers
+// (create_session_keys(height)); the shorter forms conservatively assume the
+// scheme's default expansion height. With log2(n)-height keys — the tree
+// convention, since projection needs them anyway — h_q may use the whole
+// ring (W = n), which halves the beta fold work at a given L by allowing a
+// larger N0.
+TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
+                                              const PirParams &scheme,
+                                              size_t session_key_height);
 
 // Expansion-only PirParams view for a tree query: fst_dim_sz = N0,
 // num_other_dims = b + r, expansion_height = h_q. Built via

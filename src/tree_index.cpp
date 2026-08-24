@@ -5,6 +5,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -48,20 +49,30 @@ TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n,
                                    size_t ell_beta, size_t ell_gamma,
                                    uint64_t t,
                                    std::vector<uint64_t> rns_moduli) {
+  return make_tree_pir_params(L, a, n, /*g=*/1, ell_beta, ell_gamma, t,
+                              std::move(rns_moduli));
+}
+
+TreePirParams make_tree_pir_params(size_t L, size_t a, size_t n, size_t g,
+                                   size_t ell_beta, size_t ell_gamma,
+                                   uint64_t t,
+                                   std::vector<uint64_t> rns_moduli) {
   require(L > 0 && L < std::numeric_limits<size_t>::digits - 1,
           "tree height is out of range");
   require(a < std::numeric_limits<size_t>::digits - 1,
           "first-dimension width is out of range");
   require(n > 0, "ring degree must be positive");
+  require(g > 0 && n % g == 0 && n / g >= 2,
+          "g must divide n with at least two records per plaintext");
   require(ell_beta > 0 && ell_gamma > 0, "gadget lengths must be positive");
 
   TreePirParams params;
   params.L = L;
   params.N = size_t{1} << L;
   params.n = n;
-  params.g = 1;
-  params.rho = n;  // rho = n / g with g = 1
-  params.r = exact_log2(n, "ring degree");
+  params.g = g;
+  params.rho = n / g;
+  params.r = exact_log2(params.rho, "records per plaintext");
   params.a = a;
   params.N0 = size_t{1} << a;
 
@@ -105,14 +116,15 @@ void validate_tree_params(const TreePirParams &params) {
   require(params.N == size_t{1} << params.L, "N must equal 2^L");
   require(params.N0 == size_t{1} << params.a, "N0 must equal 2^a");
 
-  require(params.g == 1, "the MVP supports only g = 1");
+  require(std::has_single_bit(params.g), "g must be a power of two");
+  require(params.g <= params.n / 2, "g must leave at least two records");
   require(params.rho == params.n / params.g, "rho must equal n / g");
   require(params.r == exact_log2(params.rho, "rho"), "r must equal log2(rho)");
-  require(params.n <= params.N, "rho = n must fit below the leaf count");
+  require(params.rho <= params.N, "rho must fit below the leaf count");
   require(params.N0 >= 2, "N0 must be at least 2");
-  require(params.N0 <= params.N / params.n, "N0 exceeds N / n");
-  require(params.N % (params.n * params.N0) == 0,
-          "N must be divisible by n * N0");
+  require(params.N0 <= params.N / params.rho, "N0 exceeds N / rho");
+  require(params.N % (params.rho * params.N0) == 0,
+          "N must be divisible by rho * N0");
 
   require(params.L >= params.r + params.a, "L is below r + a");
   require(params.b == params.L - params.r - params.a, "b must be L - r - a");

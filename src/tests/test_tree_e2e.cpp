@@ -55,9 +55,7 @@ void PirTest::test_tree_e2e() {
     const PirParams qparams = tree_query_expansion_params(tree, scheme);
     PirServer server(qparams);
     server.set_client_session_keys(client.get_client_id(), keys);
-    const std::vector<TreeLevelDatabase> levels =
-        preprocess_tree_reference(tree, source);
-    const std::vector<LevelPlan> plans = build_level_plans(tree);
+    const PreprocessedTree db = preprocess_tree_mvp(tree, source, scheme);
 
     const std::vector<size_t> leaves = {
         0, tree.N - 1, 0x2BADBEEFULL % tree.N,
@@ -69,8 +67,8 @@ void PirTest::test_tree_e2e() {
 
       const auto start = std::chrono::steady_clock::now();
       TreePathResponse response =
-          answer_path_mvp(levels, plans, unpacked, server,
-                          client.get_client_id(), tree, scheme);
+          answer_path_mvp(db, unpacked, server, client.get_client_id(), tree,
+                          scheme);
       const double server_ms =
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - start)
@@ -87,8 +85,8 @@ void PirTest::test_tree_e2e() {
                      "extracted path value must match the tree node");
       }
       BENCH_PRINT("L=" << L << " leaf=" << leaf << " path server time "
-                  << server_ms << " ms, response noise budget "
-                  << client.noise_budget(response.chunks[0]) << " bits");
+                  << server_ms << " ms, small_q response: "
+                  << (response.small_q ? "yes" : "no"));
     }
 
     // Fresh-seed repeatability (sec. 21.9): a second query for the same leaf
@@ -102,12 +100,10 @@ void PirTest::test_tree_e2e() {
         server, scheme, tree, client.get_client_id(), first_q);
     ExpandedTreeQuery second_u = unpack_tree_query(
         server, scheme, tree, client.get_client_id(), second_q);
-    TreePathResponse first_r =
-        answer_path_mvp(levels, plans, first_u, server,
-                        client.get_client_id(), tree, scheme);
-    TreePathResponse second_r =
-        answer_path_mvp(levels, plans, second_u, server,
-                        client.get_client_id(), tree, scheme);
+    TreePathResponse first_r = answer_path_mvp(
+        db, first_u, server, client.get_client_id(), tree, scheme);
+    TreePathResponse second_r = answer_path_mvp(
+        db, second_u, server, client.get_client_id(), tree, scheme);
     require_test(extract_path_mvp(first_r, client, tree) ==
                      extract_path_mvp(second_r, client, tree),
                  "fresh-seed repetitions must decode the same path");

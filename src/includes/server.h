@@ -56,6 +56,14 @@ public:
   // doing any homomorphic work.
   inline const PirParams &get_params() const { return pir_params_; }
 
+  // Final same-ring modulus switch for an externally assembled response
+  // (tree PIR Milestone 5): centered-rescale the full-q ciphertext to the
+  // single small-q limb exactly as make_query does, under the same
+  // SmallQWidth guard. Returns true when the switch was applied; false means
+  // the configuration keeps responses at full q and the ciphertext is
+  // untouched. Must run only after all homomorphic work.
+  bool switch_response_to_small_q(RlweCt &response);
+
   // 只序列化 small-q response ciphertext：先 c0 后 c1，每个 coefficient
   // 固定写 small_q_width bits，bit order 为 LSB-first。这个 research prototype
   // format 无 authentication/integrity；对应 reader side 不检查 payload 后
