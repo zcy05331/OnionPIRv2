@@ -44,6 +44,16 @@ SharedPirSessionKeys PirClient::create_session_keys() {
   return keys;
 }
 
+SharedPirSessionKeys PirClient::create_session_keys(size_t bv_key_height) {
+  // A height-overridden expansion-only view keeps every scheme field while
+  // letting gen_bv_galois_keys emit keys for (N >> i) + 1, i < bv_key_height.
+  auto keys = std::make_shared<PirSessionKeys>();
+  keys->bv_galois_keys = bvks::gen_bv_galois_keys(
+      pir_params_.with_query_shape({1, 0, bv_key_height}), rlwe_sk_);
+  keys->gsw_key = generate_gsw_from_key();
+  return keys;
+}
+
 
 std::vector<size_t> PirClient::get_query_indices(
     const PirParams &query_params, size_t pt_idx) const {

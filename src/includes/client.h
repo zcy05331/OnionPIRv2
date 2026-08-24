@@ -45,6 +45,12 @@ public:
   GSWCt generate_gsw_from_key();
   // Construct one scheme-level helper bundle for all compatible layouts.
   SharedPirSessionKeys create_session_keys();
+  // Same bundle with BV Galois coverage generated at an explicit height.
+  // Tree-PIR projection applies Subs(eta_j = n/2^j + 1) for every
+  // j < min(r, level) and therefore needs log2(n) keys regardless of the
+  // query expansion height; the default bundle stops at the compile-time
+  // TREE_HEIGHT.
+  SharedPirSessionKeys create_session_keys(size_t bv_key_height);
 
   inline size_t get_client_id() const { return client_id_; }
 
