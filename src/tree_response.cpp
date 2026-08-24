@@ -95,6 +95,64 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
   return response;
 }
 
+CompressedPathResponse answer_path_compressed(
+    const PreprocessedTree &db, ExpandedTreeQuery &query, PirServer &server,
+    size_t client_id, const TreePirParams &tree, const PirParams &scheme,
+    const TreeRingSwitchKeys &keys) {
+  const bool use_m32 = !db.m32.empty();
+  if ((use_m32 ? db.m32.size() : db.ntt.size()) != tree.L + 1 ||
+      db.plans.size() != tree.L + 1) {
+    throw std::invalid_argument(
+        "tree_response: one database view and one plan per level are "
+        "required");
+  }
+  if (2 * tree.L >= tree.rho) {
+    throw std::invalid_argument(
+        "tree_response: even-aligned packing needs 2L < rho");
+  }
+  const bvks::BvGaloisKeys &galois_keys =
+      server.client_session_keys(client_id)->bv_galois_keys;
+
+  const AlphaPyramid pyramid =
+      build_alpha_pyramid(query.alpha, tree, scheme);
+  const AlphaPyramid pyramid_ntt = pyramid_to_ntt(pyramid, scheme);
+  AlphaPyramidM32 pyramid_m32;
+  if (use_m32) {
+    pyramid_m32 = pyramid_to_m32(pyramid_ntt, scheme);
+  }
+
+  // Same per-level pipeline as answer_path_mvp, packed at even offsets and
+  // kept at full q for the ring switch.
+  std::vector<size_t> offsets(tree.L + 1, 0);
+  RlweCt packed;
+  for (size_t level = 0; level <= tree.L; ++level) {
+    RlweCt selected =
+        use_m32 ? select_level_m32(
+                      db.m32[level], db.plans[level], pyramid_m32,
+                      std::span<GSWCt>(query.beta_selectors), server, tree,
+                      scheme)
+                : select_level_ntt(
+                      db.ntt[level], db.plans[level], pyramid_ntt,
+                      std::span<GSWCt>(query.beta_selectors), server, tree,
+                      scheme);
+    RlweCt rotated = private_rotate_level(
+        std::move(selected), db.plans[level],
+        std::span<GSWCt>(query.gamma_selectors), server, scheme);
+    RlweCt projected = project_keep_stride(
+        std::move(rotated), db.plans[level].projection_depth, galois_keys,
+        scheme);
+    offsets[level] = 2 * level;
+    if (level == 0) {
+      packed = std::move(projected);
+    } else {
+      const RlweCt shifted = mul_x_pow(projected, 2 * level, scheme);
+      tree_ct_add_inplace(packed, shifted, scheme);
+    }
+  }
+
+  return compress_path_response(packed, offsets, tree.L + 1, keys, scheme);
+}
+
 std::vector<std::vector<uint64_t>> extract_path_chunks_mvp(
     const TreePathResponse &response, PirClient &client,
     const TreePirParams &tree) {

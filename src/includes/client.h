@@ -5,6 +5,7 @@
 #include "bv_keyswitch.h"
 #include "pir_session.h"
 #include "rlwe.h"
+#include "tree_compress.h"
 #include <random>
 
 class PirClient {
@@ -45,6 +46,13 @@ public:
   GSWCt generate_gsw_from_key();
   // Construct one scheme-level helper bundle for all compatible layouts.
   SharedPirSessionKeys create_session_keys();
+  // Milestone-7 material: one independent small-ring target secret plus the
+  // two gadget key-switch row sets (even/odd components of the main secret
+  // under s2, at full q) that let the server ring-switch a payload-aligned
+  // path response down to R_{n2}. The keys half goes to the server; the
+  // secret half stays with the client for decoding.
+  TreeRingSwitchBundle create_ring_switch_bundle(size_t n2);
+
   // Same bundle with BV Galois coverage generated at an explicit height.
   // Tree-PIR projection applies Subs(eta_j = n/2^j + 1) for every
   // j < min(r, level) and therefore needs log2(n) keys regardless of the

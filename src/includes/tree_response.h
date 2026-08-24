@@ -2,6 +2,7 @@
 
 #include "client.h"
 #include "server.h"
+#include "tree_compress.h"
 #include "tree_index.h"
 #include "tree_query.h"
 #include "tree_select.h"
@@ -57,6 +58,17 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
                                  ExpandedTreeQuery &query, PirServer &server,
                                  size_t client_id, const TreePirParams &tree,
                                  const PirParams &scheme);
+
+// Milestone-7 answer path: identical per-level pipeline, but the packer
+// places level z at offset 2z (the sec. 23.4 alignment: the whole payload
+// lands on the even sublattice), skips the big-ring modulus switch, and
+// hands the full-q response to the d = 2 ring switch. Requires a single
+// chunk with 2 * (L + 1) - 2 < rho and the client's registered ring-switch
+// keys; the response shrinks from 2 n log q2 to 2 (n/2) log q2 bits.
+CompressedPathResponse answer_path_compressed(
+    const PreprocessedTree &db, ExpandedTreeQuery &query, PirServer &server,
+    size_t client_id, const TreePirParams &tree, const PirParams &scheme,
+    const TreeRingSwitchKeys &keys);
 
 // Algorithm 8 ExtractPathMVP: decrypt every chunk under the original secret
 // (small-q decryption when the Milestone-5 switch ran) and read the path in

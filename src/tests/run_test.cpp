@@ -15,10 +15,11 @@ void PirTest::run_test(const std::string &test_name) {
   else if (test_name == "tree_rotate")       test_tree_rotate();
   else if (test_name == "tree_project")      test_tree_project();
   else if (test_name == "tree_e2e")          test_tree_e2e();
-  else if (test_name == "tree_bench")        test_tree_benchmark();
   else if (test_name == "tree_kernel")       test_tree_kernel();
+  else if (test_name == "tree_bench")        test_tree_benchmark();
   else if (test_name == "tree_g32")          test_tree_g32();
   else if (test_name == "tree_bench_g32")    test_tree_benchmark_g32();
+  else if (test_name == "tree_compress")     test_tree_compress();
   else if (test_name == "decrypt_mod_q")     test_decrypt_mod_q();
   else if (test_name == "mod_switch")        test_mod_switch();
   else if (test_name == "db_shape")          test_db_shape();

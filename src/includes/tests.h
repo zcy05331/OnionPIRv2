@@ -65,13 +65,15 @@ class PirTest {
     void test_tree_project();
     // Milestone 4: full path pipeline, chunk packing, client decode.
     void test_tree_e2e();
-    // Timed MVP path benchmark at the baseline workload scale (2^24 leaves).
-    void test_tree_benchmark();
     // Milestone 6: scalar vs NTT first-dimension kernels, bit-for-bit.
     void test_tree_kernel();
+    // Timed MVP path benchmark at the baseline workload scale (2^24 leaves).
+    void test_tree_benchmark();
     // Real-scenario g=32: 32-byte nodes end to end, plus its benchmark.
     void test_tree_g32();
     void test_tree_benchmark_g32();
+    // Milestone 7: d=2 ring-switched response compression gate.
+    void test_tree_compress();
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();

@@ -55,6 +55,64 @@ SharedPirSessionKeys PirClient::create_session_keys(size_t bv_key_height) {
 }
 
 
+TreeRingSwitchBundle PirClient::create_ring_switch_bundle(size_t n2) {
+  constexpr size_t N = DBConsts::PolyDegree;
+  if (n2 * 2 != N) {
+    throw std::invalid_argument(
+        "ring switch bundle currently supports n2 = n / 2");
+  }
+  if (pir_params_.K() != 1) {
+    throw std::invalid_argument(
+        "ring switch bundle supports single-limb schemes");
+  }
+  const uint64_t q = pir_params_.get_rns_mods()[0];
+  const double sigma = pir_params_.get_noise_std_dev();
+  const size_t l2 = 2;
+  const size_t base_log2 = (pir_params_.get_ct_mod_width() + l2 - 1) / l2;
+
+  // Recover the ternary main secret in coefficient form and split it into
+  // its even/odd small-ring components.
+  std::vector<uint64_t> sk_coef(rlwe_sk_.data.begin(),
+                                rlwe_sk_.data.begin() + N);
+  utils::ntt_inv(sk_coef.data(), N, q);
+  std::vector<std::vector<uint64_t>> component(
+      2, std::vector<uint64_t>(n2, 0));
+  for (size_t k = 0; k < n2; ++k) {
+    component[0][k] = sk_coef[2 * k];
+    component[1][k] = sk_coef[2 * k + 1];
+  }
+
+  TreeRingSwitchBundle bundle;
+  bundle.secret.n2 = n2;
+  bundle.secret.s2.assign(n2, 0);
+  utils::sample_ternary(bundle.secret.s2.data(), n2, q, rng_);
+
+  bundle.keys.n2 = n2;
+  bundle.keys.l2 = l2;
+  bundle.keys.base_log2 = base_log2;
+  bundle.keys.rows.assign(2, {});
+  std::vector<uint64_t> noise(n2), c1(n2);
+  for (size_t c = 0; c < 2; ++c) {
+    bundle.keys.rows[c].reserve(l2);
+    for (size_t t = 0; t < l2; ++t) {
+      // Gadget row: c0 = -c1 * s2 + e + B^t * s_c (raw message, no Delta).
+      utils::sample_uniform_poly(c1.data(), n2, q, rng_);
+      utils::sample_gaussian(noise.data(), n2, q, sigma, rng_);
+      std::vector<uint64_t> c0 = small_ring_mul(c1, bundle.secret.s2, q);
+      const uint128_t power = static_cast<uint128_t>(1)
+                              << (t * base_log2);
+      for (size_t i = 0; i < n2; ++i) {
+        const uint64_t message = static_cast<uint64_t>(
+            (static_cast<uint128_t>(component[c][i]) * power) % q);
+        c0[i] = (q - c0[i] + noise[i]) % q;
+        c0[i] = (c0[i] + message) % q;
+      }
+      bundle.keys.rows[c].emplace_back(std::move(c0), c1);
+    }
+  }
+  return bundle;
+}
+
 std::vector<size_t> PirClient::get_query_indices(
     const PirParams &query_params, size_t pt_idx) const {
   // Algorithm 4 line 1 把扁平 plaintext index 映射到 QueryPack 坐标。
