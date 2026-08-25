@@ -74,6 +74,9 @@ class PirTest {
     void test_tree_benchmark_g32();
     // Milestone 7: d=2 ring-switched response compression gate.
     void test_tree_compress();
+    // Cuckoo-hash batch PIR baseline: correctness gate and L=22 benchmark.
+    void test_cuckoo_batch();
+    void test_cuckoo_benchmark();
     void test_mod_switch();
     void test_db_shape();
     void test_runtime_layout();

@@ -20,6 +20,8 @@ void PirTest::run_test(const std::string &test_name) {
   else if (test_name == "tree_g32")          test_tree_g32();
   else if (test_name == "tree_bench_g32")    test_tree_benchmark_g32();
   else if (test_name == "tree_compress")     test_tree_compress();
+  else if (test_name == "cuckoo_batch")      test_cuckoo_batch();
+  else if (test_name == "cuckoo_bench")      test_cuckoo_benchmark();
   else if (test_name == "decrypt_mod_q")     test_decrypt_mod_q();
   else if (test_name == "mod_switch")        test_mod_switch();
   else if (test_name == "db_shape")          test_db_shape();
