@@ -1,0 +1,273 @@
+#include "tests.h"
+#include "cuckoo_batch.h"
+#include "merkle_baseline.h"
+#include "merkle_benchmark.h"
+
+#include <bit>
+#include <chrono>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <vector>
+
+namespace {
+
+// Flat root-excluded heap decode: ordinal -> (level, level-local index).
+std::pair<size_t, size_t> node_of_ordinal(size_t ordinal) {
+  const size_t heap = ordinal + 2;
+  const size_t level = std::bit_width(heap) - 1;
+  return {level, heap - (size_t{1} << level)};
+}
+
+// First feasible flat reference layout, as in the baseline suite.
+PirParams flat_reference(size_t target_num_pt) {
+  PirParams scheme;
+  for (size_t height = 0; height <= 10; ++height) {
+    try {
+      return scheme.with_layout({target_num_pt, height, true});
+    } catch (const std::runtime_error &) {
+    }
+  }
+  throw std::runtime_error("no flat reference layout for this workload");
+}
+
+// The k sibling ordinals of one leaf (levels H..1), the same work unit the
+// flat and layerwise baselines retrieve.
+std::vector<uint32_t> sibling_ordinals(size_t leaf, size_t tree_height) {
+  std::vector<uint32_t> ordinals;
+  ordinals.reserve(tree_height);
+  for (size_t level = tree_height; level >= 1; --level) {
+    const size_t local = merkle_sibling_local(leaf, tree_height, level);
+    ordinals.push_back(
+        static_cast<uint32_t>(merkle_flat_ordinal(level, local)));
+    if (level == 1) break;
+  }
+  return ordinals;
+}
+
+// Plaintext source packing one bucket's sorted members with synthetic nodes.
+PlaintextSource bucket_source(const CuckooBucket &bucket,
+                              const PirParams &params) {
+  return [&bucket, &params](size_t index, RlwePt &out) {
+    const size_t first = index * 96;
+    const size_t count =
+        std::min(size_t{96}, bucket.members.size() - first);
+    std::vector<MerkleNode> nodes;
+    nodes.reserve(count);
+    for (size_t offset = 0; offset < count; ++offset) {
+      const auto [level, local] =
+          node_of_ordinal(bucket.members[first + offset]);
+      nodes.push_back(synthetic_merkle_node(level, local));
+    }
+    out = encode_merkle_nodes(nodes, params);
+  };
+}
+
+}  // namespace
+
+// Correctness gate at H = 13: bucket membership, deterministic cuckoo
+// placement, and a full encrypted batch round recovering every sibling.
+void PirTest::test_cuckoo_batch() {
+  print_func_name(__FUNCTION__);
+  const size_t tree_height = 13;
+  const size_t leaf_count = size_t{1} << tree_height;
+  const size_t item_count = 2 * (leaf_count - 1);
+  const CuckooBatchParams params =
+      make_cuckoo_batch_params(item_count, tree_height, 0x63756b31ULL);
+  require_test(params.num_buckets == (3 * tree_height + 1) / 2,
+               "1.5x bucket sizing");
+
+  const PirParams reference =
+      flat_reference(utils::roundup_div(item_count, size_t{96}));
+  std::vector<CuckooBucket> buckets =
+      build_cuckoo_buckets(params, reference);
+
+  // Membership: every sampled ordinal is present in each hashed bucket, and
+  // positions are consistent with the sorted member lists.
+  for (uint32_t ordinal = 0; ordinal < item_count;
+       ordinal += 977) {
+    for (size_t j = 0; j < params.num_hashes; ++j) {
+      const CuckooBucket &bucket =
+          buckets[cuckoo_bucket_of(ordinal, j, params)];
+      const size_t position = cuckoo_position(bucket, ordinal);
+      require_test(bucket.members[position] == ordinal,
+                   "position rank addresses the ordinal");
+    }
+  }
+
+  PirClient client(reference);
+  SharedPirSessionKeys keys = client.create_session_keys();
+  std::vector<std::unique_ptr<PirServer>> servers;
+  servers.reserve(buckets.size());
+  for (const CuckooBucket &bucket : buckets) {
+    auto server = std::make_unique<PirServer>(bucket.params);
+    server->set_client_session_keys(client.get_client_id(), keys);
+    server->load_data(bucket.target_num_pt,
+                      bucket_source(bucket, bucket.params));
+    servers.push_back(std::move(server));
+  }
+
+  for (size_t leaf : {size_t{0}, leaf_count / 2 + 3, leaf_count - 1}) {
+    const std::vector<uint32_t> ordinals =
+        sibling_ordinals(leaf, tree_height);
+    const auto assignment = cuckoo_place(ordinals, params);
+
+    // Every ordinal is assigned exactly once, to one of its candidates.
+    size_t assigned = 0;
+    for (size_t b = 0; b < assignment.size(); ++b) {
+      if (!assignment[b].has_value()) continue;
+      ++assigned;
+      bool candidate = false;
+      for (size_t j = 0; j < params.num_hashes; ++j) {
+        candidate |= cuckoo_bucket_of(*assignment[b], j, params) == b;
+      }
+      require_test(candidate, "assignment respects the candidate buckets");
+    }
+    require_test(assigned == ordinals.size(),
+                 "every batch item is placed exactly once");
+
+    // One PIR round per bucket; unassigned buckets ask a dummy index.
+    for (size_t b = 0; b < buckets.size(); ++b) {
+      const size_t position =
+          assignment[b].has_value()
+              ? cuckoo_position(buckets[b], *assignment[b])
+              : 0;
+      RlweCt query = client.fast_generate_query(buckets[b].params,
+                                                position / 96);
+      RlweCt response = servers[b]->make_query(client.get_client_id(), query);
+      std::stringstream wire;
+      (void)servers[b]->save_resp_to_stream(response, wire);
+      RlweCt loaded = client.load_resp_from_stream(wire);
+      const RlwePt pt = client.decrypt_mod_q(loaded);
+      if (assignment[b].has_value()) {
+        const auto [level, local] = node_of_ordinal(*assignment[b]);
+        require_test(decode_merkle_node(pt, position % 96,
+                                        buckets[b].params) ==
+                         synthetic_merkle_node(level, local),
+                     "batched sibling must decode exactly");
+      }
+    }
+  }
+}
+
+// Timed batch retrieval at the comparison workload: L = 22, 32-byte nodes,
+// 16 measured trials after 3 warmups, one full 22-sibling batch per trial.
+void PirTest::test_cuckoo_benchmark() {
+  print_func_name(__FUNCTION__);
+  using Clock = std::chrono::steady_clock;
+  const auto ms_since = [](Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start)
+        .count();
+  };
+
+  const size_t tree_height = 22;
+  const size_t leaf_count = size_t{1} << tree_height;
+  const size_t item_count = 2 * (leaf_count - 1);
+  const CuckooBatchParams params =
+      make_cuckoo_batch_params(item_count, tree_height, 0x63756b32ULL);
+  const PirParams reference =
+      flat_reference(utils::roundup_div(item_count, size_t{96}));
+
+  const auto setup_start = Clock::now();
+  std::vector<CuckooBucket> buckets =
+      build_cuckoo_buckets(params, reference);
+  PirClient client(reference);
+  SharedPirSessionKeys keys = client.create_session_keys();
+  std::vector<std::unique_ptr<PirServer>> servers;
+  servers.reserve(buckets.size());
+  size_t total_pt = 0, max_bucket = 0;
+  for (const CuckooBucket &bucket : buckets) {
+    auto server = std::make_unique<PirServer>(bucket.params);
+    server->set_client_session_keys(client.get_client_id(), keys);
+    server->load_data(bucket.target_num_pt,
+                      bucket_source(bucket, bucket.params));
+    total_pt += bucket.target_num_pt;
+    max_bucket = std::max(max_bucket, bucket.members.size());
+    servers.push_back(std::move(server));
+  }
+  const double setup_ms = ms_since(setup_start);
+
+  constexpr size_t kWarmups = 3;
+  constexpr size_t kTrials = 16;
+  const BenchmarkTrialPlan plan = make_benchmark_trial_plan(
+      leaf_count, kWarmups, kTrials, 0x63756b6f6f504952ULL);
+
+  std::vector<double> client_ms, server_ms, decode_ms;
+  size_t response_bytes_total = 0;
+  const auto run_trial = [&](size_t leaf, bool measured) {
+    const std::vector<uint32_t> ordinals =
+        sibling_ordinals(leaf, tree_height);
+    const auto assignment = cuckoo_place(ordinals, params);
+    double c_ms = 0, s_ms = 0, d_ms = 0;
+    size_t resp_bytes = 0;
+    size_t recovered = 0;
+    for (size_t b = 0; b < buckets.size(); ++b) {
+      const size_t position =
+          assignment[b].has_value()
+              ? cuckoo_position(buckets[b], *assignment[b])
+              : 0;
+      auto start = Clock::now();
+      RlweCt query = client.fast_generate_query(buckets[b].params,
+                                                position / 96);
+      c_ms += ms_since(start);
+
+      start = Clock::now();
+      RlweCt response = servers[b]->make_query(client.get_client_id(), query);
+      s_ms += ms_since(start);
+
+      std::stringstream wire;
+      resp_bytes += servers[b]->save_resp_to_stream(response, wire);
+      start = Clock::now();
+      RlweCt loaded = client.load_resp_from_stream(wire);
+      const RlwePt pt = client.decrypt_mod_q(loaded);
+      d_ms += ms_since(start);
+      if (assignment[b].has_value()) {
+        const auto [level, local] = node_of_ordinal(*assignment[b]);
+        require_test(decode_merkle_node(pt, position % 96,
+                                        buckets[b].params) ==
+                         synthetic_merkle_node(level, local),
+                     "benchmark batch sibling mismatch");
+        ++recovered;
+      }
+    }
+    require_test(recovered == tree_height,
+                 "every sibling recovered in the batch");
+    if (measured) {
+      client_ms.push_back(c_ms);
+      server_ms.push_back(s_ms);
+      decode_ms.push_back(d_ms);
+      response_bytes_total = resp_bytes;
+    }
+  };
+
+  for (size_t leaf : plan.warmup_leaf_indices) run_trial(leaf, false);
+  for (size_t leaf : plan.measured_leaf_indices) run_trial(leaf, true);
+
+  const auto avg = [](const std::vector<double> &v) {
+    return std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+  };
+  const size_t query_bytes =
+      params.num_buckets * reference.get_BFV_size(true);
+
+  BENCH_PRINT("cuckoo batch PIR: L=" << tree_height << ", k=" << tree_height
+              << ", buckets=" << params.num_buckets << " (3 hashes, 1.5x)");
+  BENCH_PRINT("database: " << total_pt << " packed plaintexts across buckets"
+              " (3x replication, " << (total_pt * 3072) / (1 << 20)
+              << " MiB logical), largest bucket " << max_bucket
+              << " nodes, setup " << setup_ms << " ms");
+  BENCH_PRINT("trials: " << kTrials << " measured after " << kWarmups
+              << " warmup");
+  BENCH_PRINT("client query avg " << avg(client_ms) << " ms");
+  BENCH_PRINT("server batch avg " << avg(server_ms)
+              << " ms; samples:");
+  for (double v : server_ms) BENCH_PRINT("  batch " << v << " ms");
+  BENCH_PRINT("client decode avg " << avg(decode_ms) << " ms");
+  BENCH_PRINT("communication: queries " << query_bytes << " B (modeled, "
+              << params.num_buckets << " ciphertexts), responses "
+              << response_bytes_total << " B (actual wire codec), online "
+              << query_bytes + response_bytes_total
+              << " B; helper keys shared bundle "
+              << modeled_helper_key_bytes(reference) << " B (modeled)");
+  BENCH_PRINT("payload: " << tree_height << " x 32-byte siblings = "
+              << tree_height * 32 << " B useful; position metadata public");
+}
