@@ -1,0 +1,12 @@
+commit:      0801132b4b0a96908067da6335a5e21d92646fa2 (main)
+utc:         20260831T204522Z
+os:          Linux node0.zcy05331-314242.merkle-pg0.wisc.cloudlab.us 6.8.0-138-generic #138-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 22:41:49 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+cpu:         Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz  mem=134654857216B
+arch:        x86_64 rosetta=0
+compiler:    c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+cmake:       cmake version 3.28.3
+hexl:        /users/zcy05331/OnionPIRv2/hexl_install/lib64/cmake/hexl-1.2.6 NOAVX512=OFF
+config:      CONFIG_N2048_K1_COMP
+knobs:       trials=64 warmup=3 seed=5723628103747520850 scales='1gb 4gb' case=all
+?? perf_suite.killed-1788209122.log
+?? perf_suite.log

@@ -1,0 +1,145 @@
+Running test: tree_bench_g32
+==============================================================================
+                    test_tree_benchmark_g32(Benchmark build)
+==============================================================================
+Noise budget after decryption: 1 (max noise: 156)
+Noise budget after decryption: 1 (max noise: 182)
+Noise budget after decryption: 1 (max noise: 129)
+Noise budget after decryption: 1 (max noise: 154)
+Noise budget after decryption: 2 (max noise: 111)
+Noise budget after decryption: 1 (max noise: 149)
+Noise budget after decryption: 1 (max noise: 130)
+Noise budget after decryption: 1 (max noise: 162)
+Noise budget after decryption: 1 (max noise: 166)
+Noise budget after decryption: 1 (max noise: 162)
+Noise budget after decryption: 1 (max noise: 132)
+Noise budget after decryption: 2 (max noise: 118)
+Noise budget after decryption: 1 (max noise: 178)
+Noise budget after decryption: 1 (max noise: 159)
+Noise budget after decryption: 1 (max noise: 155)
+Noise budget after decryption: 1 (max noise: 142)
+Noise budget after decryption: 2 (max noise: 118)
+Noise budget after decryption: 1 (max noise: 137)
+Noise budget after decryption: 1 (max noise: 152)
+Noise budget after decryption: 1 (max noise: 131)
+Noise budget after decryption: 1 (max noise: 167)
+Noise budget after decryption: 1 (max noise: 179)
+Noise budget after decryption: 1 (max noise: 134)
+Noise budget after decryption: 1 (max noise: 128)
+Noise budget after decryption: 1 (max noise: 179)
+Noise budget after decryption: 1 (max noise: 184)
+Noise budget after decryption: 1 (max noise: 138)
+Noise budget after decryption: 1 (max noise: 148)
+Noise budget after decryption: 1 (max noise: 160)
+Noise budget after decryption: 1 (max noise: 128)
+Noise budget after decryption: 2 (max noise: 127)
+Noise budget after decryption: 1 (max noise: 147)
+Noise budget after decryption: 1 (max noise: 155)
+Noise budget after decryption: 1 (max noise: 157)
+Noise budget after decryption: 1 (max noise: 144)
+Noise budget after decryption: 1 (max noise: 159)
+Noise budget after decryption: 2 (max noise: 123)
+Noise budget after decryption: 1 (max noise: 165)
+Noise budget after decryption: 1 (max noise: 151)
+Noise budget after decryption: 1 (max noise: 148)
+Noise budget after decryption: 2 (max noise: 121)
+Noise budget after decryption: 1 (max noise: 129)
+Noise budget after decryption: 1 (max noise: 132)
+Noise budget after decryption: 1 (max noise: 147)
+Noise budget after decryption: 1 (max noise: 138)
+Noise budget after decryption: 1 (max noise: 137)
+Noise budget after decryption: 1 (max noise: 134)
+Noise budget after decryption: 1 (max noise: 149)
+Noise budget after decryption: 1 (max noise: 131)
+Noise budget after decryption: 1 (max noise: 162)
+Noise budget after decryption: 1 (max noise: 156)
+Noise budget after decryption: 1 (max noise: 134)
+Noise budget after decryption: 1 (max noise: 183)
+Noise budget after decryption: 1 (max noise: 128)
+Noise budget after decryption: 1 (max noise: 169)
+Noise budget after decryption: 1 (max noise: 130)
+Noise budget after decryption: 1 (max noise: 140)
+Noise budget after decryption: 1 (max noise: 144)
+Noise budget after decryption: 1 (max noise: 145)
+Noise budget after decryption: 1 (max noise: 134)
+Noise budget after decryption: 1 (max noise: 163)
+Noise budget after decryption: 1 (max noise: 138)
+Noise budget after decryption: 1 (max noise: 140)
+Noise budget after decryption: 1 (max noise: 149)
+Noise budget after decryption: 1 (max noise: 163)
+Noise budget after decryption: 1 (max noise: 150)
+Noise budget after decryption: 1 (max noise: 128)
+tree MVP real-hash benchmark: N=2^22 leaves, L=22, g=32 (12-bit chunks), N0=512, b=9, rho=64, r=6, w=602, W=1024, h_q=10
+database: 524293 packed plaintexts, 32-byte nodes (1536 MiB logical payload), setup 76204.3 ms
+trials: 64 measured after 3 warmup
+client query avg 0.119785 ms
+server unpack (expand+convert) avg 108.518 ms
+server path (select+rotate+project+pack) avg 1138.93 ms
+server total avg 1247.45 ms; samples(path):
+  path 1159.89 ms
+  path 1160 ms
+  path 1158.88 ms
+  path 1159.67 ms
+  path 1162.01 ms
+  path 1165.47 ms
+  path 1162.84 ms
+  path 1156.94 ms
+  path 1161.71 ms
+  path 1159.7 ms
+  path 1161.78 ms
+  path 1158.41 ms
+  path 1162.73 ms
+  path 1156.62 ms
+  path 1162.49 ms
+  path 1169.37 ms
+  path 1170.71 ms
+  path 1140.27 ms
+  path 1138.56 ms
+  path 1139.92 ms
+  path 1138.01 ms
+  path 1139.86 ms
+  path 1128.45 ms
+  path 1141.16 ms
+  path 1127.22 ms
+  path 1140.64 ms
+  path 1127.66 ms
+  path 1140.03 ms
+  path 1137.86 ms
+  path 1128.06 ms
+  path 1137.5 ms
+  path 1129.08 ms
+  path 1139.92 ms
+  path 1145.96 ms
+  path 1130.28 ms
+  path 1129.1 ms
+  path 1124.91 ms
+  path 1135.26 ms
+  path 1124.75 ms
+  path 1135.2 ms
+  path 1124.52 ms
+  path 1135.79 ms
+  path 1125.35 ms
+  path 1135.89 ms
+  path 1123.89 ms
+  path 1125.22 ms
+  path 1125.02 ms
+  path 1123.31 ms
+  path 1126.27 ms
+  path 1122.75 ms
+  path 1128.51 ms
+  path 1126.19 ms
+  path 1126.73 ms
+  path 1125.65 ms
+  path 1128.35 ms
+  path 1126.47 ms
+  path 1124.54 ms
+  path 1126.88 ms
+  path 1125.02 ms
+  path 1127.13 ms
+  path 1127.87 ms
+  path 1128.64 ms
+  path 1124.04 ms
+  path 1128.56 ms
+client extract avg 0.111434 ms
+communication: query 14880 B (modeled, 1 ciphertext), response 11264 B (actual wire codec), helper keys 1607040 B (modeled)
+payload: 25 x 32-byte path nodes = 800 B useful
