@@ -133,7 +133,8 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
       // 步骤 (3) ProjectRecord：迹式投影只保留跨步格 {j * rho} 上的系数。
       // 深度取 plan 里的 min(r, level)：层 l < r 时旋转后非目标记录都落在
       // 非零残差 u - γ_l (mod 2^l) 上，深度 l 已足够杀光（§3.3 技巧二）；
-      // 投影内部的 2^{-d} 预缩放与展开的 2^d 精确相消，噪声不被放大。
+      // 投影内部的 2^{-d} 预缩放与 d 轮 T + Subs(T, η) 逐轮翻倍累积出的
+      // 2^d 精确相消；噪声经历同一投影，不被 2^{-d} mod q 放大（§3.3 技巧一）。
       RlweCt projected = project_keep_stride(
           select_and_rotate(level), db.plans[level].projection_depth,
           galois_keys, scheme);

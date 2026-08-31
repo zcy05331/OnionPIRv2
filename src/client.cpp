@@ -52,9 +52,11 @@ SharedPirSessionKeys PirClient::create_session_keys() {
 // i < bv_key_height——同一密钥族同时服务查询展开与投影，无需第二套密钥。
 // 输出 SharedPirSessionKeys = {BV Galois 密钥, RGSW(s) 补全密钥}，整束交给服务端注册。
 SharedPirSessionKeys PirClient::create_session_keys(size_t bv_key_height) {
-  // 用 with_query_shape({1, 0, bv_key_height}) 派生一个"仅展开"参数视图：全部 scheme
-  // 字段（模数、gadget、密钥参数）原样保留，只把 expansion_height 覆写成指定高度，
-  // 让 gen_bv_galois_keys 逐个生成 (N >> i) + 1（i < bv_key_height）的密钥。
+  // 用 with_query_shape({1, 0, bv_key_height}) 派生一个"仅展开"参数视图：scheme
+  // 字段（模数、gadget、密钥参数）原样保留，三个形状字段全部覆写
+  //（fst_dim_sz=1、selector 位数=0、expansion_height=指定高度）；
+  // gen_bv_galois_keys 只消费其中的 expansion_height，据此逐个生成
+  // (N >> i) + 1（i < bv_key_height）的密钥。
   // 该视图不承载数据库，这里只把它当高度的载体。
   auto keys = std::make_shared<PirSessionKeys>();
   keys->bv_galois_keys = bvks::gen_bv_galois_keys(
@@ -132,7 +134,8 @@ TreeRingSwitchBundle PirClient::create_ring_switch_bundle(size_t n2) {
       // 先算 c1·s₂：small_ring_mul 是 R_{n₂} 上的负循环 schoolbook 乘法
       // （u128 单次规约参考核，无需为合成模数注册 2n₂ 次根）。
       std::vector<uint64_t> c0 = small_ring_mul(c1, bundle.secret.s2, q);
-      // B^t 用 uint128 表示，防止 t·base_log2 接近 64 位时移位溢出。
+      // B^t 本身放得进 u64（l₂=2 时移位量 ≤ 30）；取 uint128 是为了让下面
+      // component·power 的乘积直接落在 128 位算术里，与取模配套。
       const uint128_t power = static_cast<uint128_t>(1)
                               << (t * base_log2);
       for (size_t i = 0; i < n2; ++i) {

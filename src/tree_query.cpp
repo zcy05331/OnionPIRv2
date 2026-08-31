@@ -59,7 +59,8 @@ TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
 // 工厂完整形式（5 参数）：树流水线中所有其它组件消费的 TreePirParams 都从
 // 这里产出。输入是树形参 (L, a, g) 与当前方案；输出是一套已绑定该方案并
 // 通过全部 §3.2 约束校验的树参数。数学上它固定分解
-// N = 2^L, N0 = 2^a, b = L - r - a（r = log2 n），并派生打包容量
+// N = 2^L, N0 = 2^a, b = L - r - a（r = log₂ ρ，ρ = n/g；g = 1 时即
+// log₂ n），并派生打包容量
 // w = N0 + ell*(b+r)、展开高度 h_q = ceil(log2 w)、展开因子 W = 2^{h_q}。
 TreePirParams make_tree_pir_params_for_scheme(size_t L, size_t a, size_t g,
                                               const PirParams &scheme,
@@ -202,8 +203,9 @@ void add_rlwe_star_constant(RlweCt &ct, const PirParams &scheme,
 // unpack_tree_query 展开。数学骨架（§8.5）：
 //   1) 叶索引一次性分解为坐标 (α, β 位串, γ 位串)——全部 L+1 层共用；
 //   2) 以零加密为底（提供 (a, e) 随机性与安全性）；
-//   3) 明文侧叠加 w 个常数：α 槽位一个 BFV 提升 + 每个"1"选择位 ell 行
-//      gadget 常数。所有常数都预乘 W^{-1}，以抵消 ExpandBFV 的乘 W 效应。
+//   3) 在 w 个逻辑槽位中仅对非零位置叠加常数：α 槽位 1 个 BFV 提升 +
+//      每个"1"选择位一组 ell 行 gadget 常数（共 1 + ell·popcount 次写入）。
+//      所有常数都预乘 W^{-1}，以抵消 ExpandBFV 的乘 W 效应。
 // 输出密文之外不泄露任何逐层信息：0 选择位与未选 α 槽位保持零加密。
 RlweCt make_tree_query(PirClient &client, const PirParams &scheme,
                        const TreePirParams &tree, size_t leaf) {

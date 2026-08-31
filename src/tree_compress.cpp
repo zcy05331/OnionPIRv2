@@ -51,8 +51,10 @@ void add_inplace_mod(std::vector<uint64_t> &acc,
 // R_{n2} = Z_q[Y]/(Y^{n2}+1) 的负循环乘法参考核。
 // 流水线位置：压缩路径里所有小环乘法（digit × KSK 行、客户端 c1 × s2）都走这里。
 // 输入：系数形式的 a、b（系数已在 [0, q)），模数 q；输出：a*b 的系数形式。
-// 设计动机：q 是合成模数 q1*q2，无法直接注册 2*n2 次单位根做 NTT；schoolbook 用
-// "正负分桶 + 每个输出一次 u128 规约"换取正确性优先的实现，NTT 化留作优化。
+// 设计动机：q 是合成模数（两个 ~29 位 NTT 友好素数之积，见 CompositeRnsTables），
+// schoolbook 免去为小环再注册 2*n2 次单位根的一步（无需，并非不可——
+// init_composite_rns 的 CRT 合根手法同样适用）；"正负分桶 + 每个输出一次
+// u128 规约"换取正确性优先的实现，NTT 化留作优化。
 std::vector<uint64_t> small_ring_mul(const std::vector<uint64_t> &a,
                                      const std::vector<uint64_t> &b,
                                      uint64_t q) {
@@ -106,7 +108,9 @@ CompressedPathResponse compress_path_response(
     size_t level_count, const TreeRingSwitchKeys &keys,
     const PirParams &scheme) {
   constexpr size_t N = DBConsts::PolyDegree;
-  // 守卫：单 limb（K=1）方案才有"一个 64 位 q"的前提，u128 schoolbook 才不溢出。
+  // 守卫：偶奇相位分解与 KSK 语义按单模数（K=1）推导，多 limb 需另行推导
+  //（与 create_ring_switch_bundle 的同款守卫对应）。schoolbook 的不溢出
+  // 前提 n2·q² < 2^127 由参数点保证，见 small_ring_mul。
   require(scheme.K() == 1,
           "the d = 2 ring switch is implemented for single-limb schemes");
   // 守卫：必须是系数形式（偶奇拆分按系数下标进行）且尚未降模的全尺寸密文。
@@ -140,7 +144,8 @@ CompressedPathResponse compress_path_response(
   }
   // 计算 Y * a_o：小环里 Y 是 X^2 的像，乘 Y 即负循环移位——
   // 系数整体右移一位，最高位系数回绕到常数项并取负（Y^{n2} = -1）。
-  // 这样 KSK 只需针对 s_o 本身生成，X 因子在此显式吸收进 a_o。
+  // 这样 KSK 只需针对 s_o 本身生成：c1 与 s 两个奇部各带的 X 相乘出的
+  // Y = X² 因子，在此显式吸收进 a_o。
   std::vector<uint64_t> ya_o(n2);
   ya_o[0] = a_o[n2 - 1] == 0 ? 0 : q - a_o[n2 - 1];
   for (size_t k = 1; k < n2; ++k) ya_o[k] = a_o[k - 1];
@@ -252,7 +257,9 @@ std::vector<std::vector<uint64_t>> decode_compressed_path(
     const uint64_t noise = up > q2 / 2 ? q2 - up : up;
     if (noise > max_noise) max_noise = noise;
   }
-  // 打印全环最大噪声与解码界 q2/(2t)：max_noise 低于界即全部系数解码正确。
+  // 打印到最近码字的最大距离与半步长界 q2/(2t)：解码正确时它等于真实噪声，
+  // 远低于界即余量健康。注意该量测构造上不会超过界（取的就是最近码字），
+  // 逼近界是危险信号，不能由"低于界"反推全部系数解码正确。
   BENCH_PRINT("Compressed-response noise: max " << max_noise << " of bound "
               << q2 / (2 * plain_mod));
 
