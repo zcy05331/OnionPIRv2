@@ -11,7 +11,7 @@ LEAF_COUNT="${LEAF_COUNT:-16777216}"
 WARMUPS="${WARMUPS:-3}"
 EXPERIMENTS="${EXPERIMENTS:-5}"
 TRIAL_SEED="${TRIAL_SEED:-5723628103747520850}"
-RUN_OPTIONAL_8GB="${RUN_OPTIONAL_8GB:-0}"
+RUN_OPTIONAL_4GB="${RUN_OPTIONAL_4GB:-0}"
 BENCHMARK_CASE="${BENCHMARK_CASE:-all}"
 
 COMMIT="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
@@ -56,10 +56,10 @@ RUN_ARGS=(
   --benchmark-case "${BENCHMARK_CASE}"
   --benchmark-json "${RESULT_JSON}"
 )
-if [[ "${RUN_OPTIONAL_8GB}" == "1" ]]; then
-  RUN_ARGS+=(--run-optional-8gb)
-elif [[ "${RUN_OPTIONAL_8GB}" != "0" ]]; then
-  echo "RUN_OPTIONAL_8GB must be 0 or 1" >&2
+if [[ "${RUN_OPTIONAL_4GB}" == "1" ]]; then
+  RUN_ARGS+=(--run-optional-4gb)
+elif [[ "${RUN_OPTIONAL_4GB}" != "0" ]]; then
+  echo "RUN_OPTIONAL_4GB must be 0 or 1" >&2
   exit 2
 fi
 

@@ -1,27 +1,29 @@
 #!/bin/bash
 # =============================================================================
-# run_perf_suite.sh — 一键式全协议性能测试: 每种协议 x {1GB, 8GB} DB x 64 次
+# run_perf_suite.sh — 一键式全协议性能测试: 每种协议 x {1GB, 4GB} DB x 64 次
+#   (唯一例外: merkle 的 4GB 档经 --run-optional-4gb 触发, 套件内固定 4 次测量)
 #
 # 一键跑全部(默认即此, 无需参数):
 #   scripts/run_perf_suite.sh
 #
 # 覆盖的协议模式("每一种"):
 #   merkle    merkle_benchmarks 套件: standard OnionPIR + flat + layerwise。
-#             一次调用同时产出 1GB(2^24 叶, 主档)与 8GB(2^27 叶,
-#             --run-optional-8gb, 套件自带 物理内存+2GB 安全门)两档,
+#             一次调用同时产出 1GB(2^24 叶, 主档, --experiments 次)与
+#             4GB(2^26 叶, --run-optional-4gb, 固定 4 次测量,
+#             套件自带 物理内存+2GB 安全门)两档,
 #             次数吃 --experiments。
 #   tree      tree_bench_g32: Tree PIR MVP, 32 字节节点。L/次数是编译期常量,
-#             本脚本按档补丁 L(1GB->L=24, 8GB->L=27)与 kTrials 后重建再跑
+#             本脚本按档补丁 L(1GB->L=24, 4GB->L=26)与 kTrials 后重建再跑
 #             (与 run_all_combos.sh 修改 database_constants.h 的先例一致)。
 #   tree-g1   tree_bench: g=1 标量 MVP(诊断性基准, 叶数与各档对齐,
-#             但每节点只有 12bit, 载荷字节数不等于 1GB/8GB, 报告里注意)。
+#             但每节点只有 12bit, 载荷字节数不等于 1GB/4GB, 报告里注意)。
 #   compress  tree_compress: M7 小环压缩门(固定小形状, 无 DB 档位, 只跑一次)。
 #   cuckoo    cuckoo_bench: cuckoo batch baseline。仅当检出含该测试
 #             (codex/cuckoo-batch-baseline 分支)时自动加入, 同样按档补丁。
 #
 # 旋钮(环境变量):
 #   EXPERIMENTS=64  每种的测量次数        WARMUPS=3
-#   SCALES="1gb 8gb"  只想跑一档可设 SCALES=1gb
+#   SCALES="1gb 4gb"  只想跑一档可设 SCALES=1gb
 #   TRIAL_SEED=5723628103747520850(与已提交结果同种子)
 #   JOBS=<nproc>    NOAVX512=OFF    SKIP_BUILD=0(=1 时不重建, 仅单档可用)
 #
@@ -30,10 +32,11 @@
 #   2) 需要 cmake>=3.13、C++20 编译器(gcc>=13 / 近年 clang)、git、perl;
 #      HEXL 依赖自动 clone(intel/hexl v1.2.6)装进 hexl_install/(gitignored;
 #      无外网可从同 OS+同架构机器拷贝该目录, 已存在即跳过)
-#   3) 内存: 8GB 档的 flat 基线与 tree MVP 峰值都远超 8GB(系数展开 ~5-16x),
+#   3) 内存: 4GB 档的 flat 基线与 tree MVP 峰值都远超 4GB(系数展开 ~5-16x),
 #      merkle 套件自带内存门, tree/cuckoo 由本脚本粗估门控, 不够则记 skip;
-#      tree 8GB 档(L=27)粗估需 ~130GB, 请在大内存服务器上跑
-#   4) 时长量级(参考 M4): flat 1GB 档 ~80s/次 x 67 ≈ 1.5h, 8GB 档再 ~8x;
+#      tree 4GB 档(L=26)粗估峰值 ~66GB, 需要大内存服务器
+#   4) 时长量级(参考 M4): flat 1GB 档 ~80s/次 x 67 ≈ 1.5h; 4GB 档虽 4 倍/次
+#      但只测 4 次, 反而更短;
 #      预留过夜时间, 建议 nohup/tmux 里跑
 #
 # 架构(强制 HEXL): Linux/macOS x86_64 原生; Apple Silicon 走 Rosetta;
@@ -41,8 +44,8 @@
 #
 # 产出: outputs/perf/<机器>_<短commit>_<UTC>/
 #   00_meta.txt 00_cpu.txt cpu_info.txt
-#   merkle.txt merkle.json(内含 1GB 与 8GB 两档 case)
-#   tree_g32_{1gb,8gb}.txt tree_g1_{1gb,8gb}.txt cuckoo_{1gb,8gb}.txt
+#   merkle.txt merkle.json(内含 1GB 与 4GB 两档 case)
+#   tree_g32_{1gb,4gb}.txt tree_g1_{1gb,4gb}.txt cuckoo_{1gb,4gb}.txt
 #   compress.txt
 # =============================================================================
 set -euo pipefail
@@ -55,7 +58,7 @@ EXPERIMENTS="${EXPERIMENTS:-64}"
 WARMUPS="${WARMUPS:-3}"
 TRIAL_SEED="${TRIAL_SEED:-5723628103747520850}"
 BENCHMARK_CASE="${BENCHMARK_CASE:-all}"
-SCALES="${SCALES:-1gb 8gb}"
+SCALES="${SCALES:-1gb 4gb}"
 NOAVX512="${NOAVX512:-OFF}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 ACTIVE_CONFIG="${ACTIVE_CONFIG:-CONFIG_N2048_K1_COMP}"
@@ -64,8 +67,8 @@ HEXL_VERSION="1.2.6"
 scale_leaf_pow() {  # 档位 -> log2(叶数): 与套件的 paper_row 标签一致
   case "$1" in
     1gb) echo 24 ;;
-    8gb) echo 27 ;;
-    *) echo "未知档位 $1(可选 1gb 8gb)" >&2; exit 2 ;;
+    4gb) echo 26 ;;
+    *) echo "未知档位 $1(可选 1gb 4gb)" >&2; exit 2 ;;
   esac
 }
 
@@ -277,15 +280,16 @@ for SCALE in ${SCALES}; do
   if [[ "${FIRST_SCALE}" == "1" ]]; then
     run_bin cpu_info.txt --test cpu_info
 
-    # merkle 套件一次调用覆盖两档: 主档 2^24(1GB), SCALES 含 8gb 时加
-    # --run-optional-8gb 让同一进程完整测量 2^27(内存不够则套件自记 skip)
+    # merkle 套件一次调用覆盖两档: 主档 2^24(1GB, --experiments 次), SCALES 含
+    # 4gb 时加 --run-optional-4gb 让同一进程再测 2^26 档(套件内固定 4 次测量,
+    # 内存不够则套件自记 skip)
     if has_mode merkle; then
       MERKLE_ARGS=(--test merkle_benchmarks
         --leaf-count $((1 << 24)) --warmup "${WARMUPS}"
         --experiments "${EXPERIMENTS}" --trial-seed "${TRIAL_SEED}"
         --benchmark-case "${BENCHMARK_CASE}"
         --benchmark-json "${OUT_DIR}/merkle.json")
-      case " ${SCALES} " in *" 8gb "*) MERKLE_ARGS+=(--run-optional-8gb) ;; esac
+      case " ${SCALES} " in *" 4gb "*) MERKLE_ARGS+=(--run-optional-4gb) ;; esac
       ONIONPIR_BENCH_COMMIT="${COMMIT}" \
       ONIONPIR_BENCH_BRANCH="${BRANCH}" \
       ONIONPIR_BENCH_PROCESS_ARCH="${ARCH}" \

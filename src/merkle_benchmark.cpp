@@ -1043,7 +1043,7 @@ bool running_under_rosetta() {
 
 std::string paper_row_for(const MerkleWorkload &workload) {
   if (workload.leaf_count == (size_t{1} << 24)) return "1 GB";
-  if (workload.leaf_count == (size_t{1} << 27)) return "8 GB";
+  if (workload.leaf_count == (size_t{1} << 26)) return "4 GB";
   return "custom";
 }
 
@@ -1117,7 +1117,7 @@ BenchmarkReport run_merkle_benchmark_suite(
   if (options.leaf_count > (size_t{1} << 24)) {
     throw std::invalid_argument(
         "Primary Merkle benchmark is capped at 2^24 leaves; request the "
-        "resource-gated 2^27 workload with --run-optional-8gb");
+        "resource-gated 2^26 workload with --run-optional-4gb");
   }
   const MerkleWorkload workload =
       make_benchmark_workload(options.leaf_count);
@@ -1197,14 +1197,14 @@ BenchmarkReport run_merkle_benchmark_suite(
                                    options.case_selection));
 
   OptionalWorkloadResult optional;
-  optional.leaf_count = size_t{1} << 27;
-  optional.tree_height = 27;
-  optional.paper_row = "8 GB";
+  optional.leaf_count = size_t{1} << 26;
+  optional.tree_height = 26;
+  optional.paper_row = "4 GB";
   if (workload.leaf_count == optional.leaf_count) {
     optional.status = "primary_workload";
-  } else if (!options.run_optional_8gb) {
+  } else if (!options.run_optional_4gb) {
     optional.status = "not_requested";
-    optional.skip_reason = "optional 8 GB run flag was not set";
+    optional.skip_reason = "optional 4 GB run flag was not set";
   } else {
     const uint64_t estimated =
         estimate_merkle_benchmark_peak_bytes(optional.leaf_count);
@@ -1224,15 +1224,18 @@ BenchmarkReport run_merkle_benchmark_suite(
           make_benchmark_workload(optional.leaf_count);
       const PirParams optional_reference =
           make_benchmark_reference(optional_workload);
+      // The optional tier is a resource probe, not the statistical anchor:
+      // it always measures a fixed 4 trials regardless of --experiments.
+      constexpr size_t kOptionalMeasuredTrials = 4;
       const BenchmarkTrialPlan optional_trials = make_benchmark_trial_plan(
           optional_workload.leaf_count, options.warmups,
-          options.measured_trials,
+          kOptionalMeasuredTrials,
           options.trial_seed ^ 0x8b47424950524952ULL);
       append_case_set(
           report.cases,
           execute_case_set(optional_workload, optional_reference,
                            optional_trials, options.case_selection,
-                           "_optional_8gb"));
+                           "_optional_4gb"));
     }
   }
   report.workload.optional_workloads.push_back(std::move(optional));

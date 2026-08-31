@@ -159,7 +159,8 @@ void PirTest::test_merkle_benchmark_stats() {
                    std::string::npos,
                "JSON omitted measured query IDs");
   // Publication gates reject invalid denominators, inconsistent wire counts,
-  // and attempts to bypass the explicit 8 GB resource gate.
+  // and attempts to run an oversized primary workload without the
+  // resource-gated optional tier.
   bool rejected_zero_time = false;
   try {
     BenchmarkCaseResult invalid = result;
@@ -225,5 +226,5 @@ void PirTest::test_merkle_benchmark_stats() {
     rejected_ungated_large_primary = true;
   }
   require_test(rejected_ungated_large_primary,
-               "accepted an ungated 8 GB primary workload");
+               "accepted an ungated oversized primary workload");
 }

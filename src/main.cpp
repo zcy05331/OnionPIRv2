@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
     size_t leaf_count = size_t{1} << 24;
     uint64_t trial_seed = MerkleBenchmarkOptions{}.trial_seed;
     std::string benchmark_json;
-    bool run_optional_8gb = false;
+    bool run_optional_4gb = false;
     BenchmarkCaseSelection benchmark_case = BenchmarkCaseSelection::all;
 
     for (int i = 1; i < argc; ++i) {
@@ -103,8 +103,8 @@ int main(int argc, char *argv[]) {
               "--benchmark-case must be all, standard_onionpir, or "
               "merkle_paths, or merkle_layerwise");
         }
-      } else if (std::strcmp(argv[i], "--run-optional-8gb") == 0) {
-        run_optional_8gb = true;
+      } else if (std::strcmp(argv[i], "--run-optional-4gb") == 0) {
+        run_optional_4gb = true;
       } else if (std::strcmp(argv[i], "--no-compress") == 0) {
         // Retained for run.py compatibility. Current query packing has one path.
       } else {
@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
       options.warmups = warmup;
       options.measured_trials = num_experiments;
       options.trial_seed = trial_seed;
-      options.run_optional_8gb = run_optional_8gb;
+      options.run_optional_4gb = run_optional_4gb;
       options.case_selection = benchmark_case;
       BenchmarkReport report = run_merkle_benchmark_suite(options);
       print_benchmark_report(report);

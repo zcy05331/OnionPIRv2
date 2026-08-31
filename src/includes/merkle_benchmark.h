@@ -170,7 +170,9 @@ struct MerkleBenchmarkOptions {
   size_t warmups = 3;
   size_t measured_trials = 5;
   uint64_t trial_seed = 0x4f6e696f6e504952ULL;
-  bool run_optional_8gb = false;
+  // Opt-in resource-gated 2^26-leaf (4 GB) workload; it always measures a
+  // fixed 4 trials regardless of measured_trials.
+  bool run_optional_4gb = false;
   BenchmarkCaseSelection case_selection = BenchmarkCaseSelection::all;
 };
 
