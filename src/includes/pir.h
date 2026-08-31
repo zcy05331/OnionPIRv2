@@ -38,14 +38,17 @@ struct PirLayoutConfig {
   bool fst_dim_pow2;
 };
 
-// Direct packed-query shape: exactly fst_dim_sz first-dimension slots plus
-// num_selector_bits gadget-row groups under a 2^expansion_height capacity.
-// Unlike PirLayoutConfig this is not derived from a plaintext target, so
-// shapes the database planner would never pick (e.g. the tree query's
-// N0 + (b + r) * L_EP layout) can be expressed exactly.
+// [Tree PIR] 直接指定的打包查询形状：恰好 fst_dim_sz 个首维槽位，加
+// num_selector_bits 个 gadget 行组，共用 2^expansion_height 的展开容量。
+// 与 PirLayoutConfig 不同，它不从明文条数派生，因此数据库规划器永远不会选出的
+// 形状（例如树查询的 N₀ + (b + r)·L_EP 布局）也能被精确表达。
 struct PirQueryShapeConfig {
+  // 首维（BFV one-hot）槽位数；树查询里等于 N₀。约束：1 ≤ fst_dim_sz ≤ 2^height。
   size_t fst_dim_sz;
+  // 高维二进制 selector 个数（树查询里为 b + r）；每个占 L_EP 个 gadget 行槽位。
+  // 约束：fst_dim_sz + L_EP·num_selector_bits ≤ 2^expansion_height。
   size_t num_selector_bits;
+  // 展开树高度 h_q，容量 = 2^h_q 个逻辑槽位；上界 log₂ N（环自同构能力）。
   size_t expansion_height;
 };
 
@@ -56,12 +59,11 @@ public:
   PirParams(const PirParams &pir_params) = default;
 
   PirParams with_layout(const PirLayoutConfig &layout) const;
-  // Expansion-only view for packed-query processing: sets fst_dim_sz_,
-  // num_dims_ = 1 + num_selector_bits and expansion_height_ verbatim while
-  // keeping every scheme field. num_pt_ collapses to fst_dim_sz because this
-  // view carries no database: it is valid for query packing, fast_expand_qry
-  // and session-key checks, but must not be used to load a database or answer
-  // make_query.
+  // [Tree PIR] 仅展开的参数视图：按 shape 原样写入 fst_dim_sz_、
+  // num_dims_ = 1 + num_selector_bits 与 expansion_height_，其余 scheme 字段全部
+  // 保留。num_pt_ 折叠为 fst_dim_sz（视图不承载数据库）：可用于查询打包、
+  // fast_expand_qry 与会话密钥校验，不可用于装载数据库或回答 make_query。
+  // 详细机制见 pir.cpp 实现处注释。
   PirParams with_query_shape(const PirQueryShapeConfig &shape) const;
   bool scheme_compatible(const PirParams &other) const;
 

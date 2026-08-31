@@ -815,48 +815,76 @@ PirServer::fast_expand_qry(std::size_t client_id, RlweCt &ciphertext) const {
       std::make_move_iterator(cts.begin() + capacity + useful_cnt));
 }
 
+// [Tree PIR 复用入口] Algorithm 2 ExpandBFV 的公共包装：把一条系数形式全 q 打包查询
+// 按本服务器的参数布局解包成 useful-leaf 常数序列（fst_dim_sz 个首维 BFV 密文，随后
+// 每个 selector 一组 L_EP 行；容量 2^expansion_height，w 右侧无用子树在展开中剪枝）。
+// 生产路径 make_query 内部直接用 fast_expand_qry；这个公共入口让树路径
+// （unpack_tree_query）复用同一份展开实现，再自行调 complete_selectors 做 RGSW 补全。
+// 输入密文只读、不被修改。
 std::vector<RlweCt> PirServer::expand_query(size_t client_id,
                                             RlweCt &query) const {
+  // 纯转发：不复制、不改布局，公共 API 只是给外部组合器开一个访问口。
   return fast_expand_qry(client_id, query);
 }
 
+// [Tree PIR M5 复用入口] 对外部组装好的响应做最后一刻的同环模数切换（手册 §4.1）：
+// 把全 q（≈58-bit）密文居中重缩放到 22-bit NTT 友好素数 q'，x → round(x·q'/q)。
+// 切换后噪声 ≈ 原噪声·(q'/q) + 舍入项（ternary 密钥下约 ||s||/2 量级），所以必须在
+// 全部同态运算完成之后才调用——提前切换损失噪声余量，且与首维 matmul、外积、
+// Galois 密钥的参数约定冲突（生产 make_query 遵守同一纪律）。
+// 返回 true 表示已切换；false 表示该配置下响应保持全 q，密文原样未动。
 bool PirServer::switch_response_to_small_q(RlweCt &response) {
+  // 守卫：SmallQWidth 与 RnsMods[0] 都是位宽；只有 q' 严格窄于首 limb 时切换才是
+  // 真正的降模压缩，否则告知调用方保持全 q（与 make_query 尾段的判定一致）。
   if (DBConsts::SmallQWidth >= DBConsts::RnsMods[0]) {
     return false;
   }
+  // 复用生产路径的 mod_switch_inplace 做居中重缩放，保证树路径与 flat 路径的
+  // 噪声/编码行为逐字节一致。
   mod_switch_inplace(response, pir_params_.get_small_q());
   return true;
 }
 
+// [QueryUnpack 单源化] Algorithm 3 / QueryUnpack 补全：把 expand_query 输出中的
+// selector 行组组装成完整 RGSW。行布局约定（fast_expand_qry 的返回序，i 从 1 计）：
+//   [0, fst_dim_sz)                                   首维 BFV 向量
+//   [fst_dim_sz + (i−1)·L_EP, fst_dim_sz + i·L_EP)    第 i 个 selector 的 top half
+// 每个 selector 恰好贡献 L_EP 行 BFV，行序与 QueryPack 写入时的 MSB-first gadget 序
+// 对齐。补全密钥是以 L_KEY 生成的 RGSW(s)；query_to_gsw 只用它派生 bottom half
+// （top 行同态乘密钥），得到 2·L_EP 行、可直接喂外积的完整 selector。
+// flat 生产路径（make_query）与树路径（unpack_tree_query）都调用这一份实现——
+// 行布局约定因此是单一来源，两条路径不可能漂移（手册 §1.5）。
 std::vector<GSWCt> PirServer::complete_selectors(
     size_t client_id, const std::vector<RlweCt> &expanded) {
-  // Algorithm 3 / QueryUnpack completion. fast_expand_qry returns:
-  //   [0, fst_dim_sz)                          first-dimension BFV vector
-  //   [fst_dim_sz + (i-1)*L_EP, fst_dim_sz + i*L_EP)  selector i top half
-  // Each selector contributes exactly L_EP BFV rows, aligned with the
-  // MSB-first gadget order used by QueryPack. The completion key is RGSW(s)
-  // generated with L_KEY; query_to_gsw uses it only to derive the bottom
-  // half, so the resulting selector has 2*L_EP rows for external products.
+  // 从参数视图读出行组几何：每组 L_EP 行、首维宽度、selector 个数 = num_dims − 1
+  // （维度约定：首维 + 每个高维 selector 各计一维）。
   const size_t l_ep = pir_params_.get_l();
   const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();
   const size_t num_selectors = pir_params_.get_num_dims() - 1;
   std::vector<GSWCt> gsw_vec(num_selectors);
+  // 单维布局没有高维 selector，直接返回空集（Algorithm 4 只用首维就结束）。
   if (num_selectors == 0) return gsw_vec;
+  // 守卫：展开输出必须至少覆盖首维加上每个 selector 一个完整 L_EP 行组，
+  // 防止形状不匹配的展开结果被静默切片出错误的行。
   if (expanded.size() < fst_dim_sz + num_selectors * l_ep) {
     throw std::invalid_argument(
         "complete_selectors expects one expanded row group per selector");
   }
+  // 补全密钥查找：优先共享会话束（多布局 API），否则回退旧的按 client 注册表。
   const auto session_it = client_sessions_.find(client_id);
   const GSWCt &completion_key =
       session_it != client_sessions_.end()
           ? session_it->second->gsw_key
           : client_gsw_keys_.at(client_id);
   for (size_t i = 1; i <= num_selectors; i++) {
+    // 按上述布局切出第 i 个 selector 的 L_EP 行 top half。
     std::vector<RlweCt> lwe_vector;
     lwe_vector.reserve(l_ep);
     for (size_t k = 0; k < l_ep; ++k) {
       lwe_vector.push_back(expanded[fst_dim_sz + (i - 1) * l_ep + k]);
     }
+    // query_to_gsw 用 RGSW(s) 同态派生 bottom half，装配出完整 RGSW selector，
+    // 写入 0 基下标 i−1。
     key_gsw_.query_to_gsw(lwe_vector, completion_key, gsw_vec[i - 1]);
   }
   return gsw_vec;

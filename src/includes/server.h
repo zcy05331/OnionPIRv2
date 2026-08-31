@@ -34,20 +34,16 @@ public:
   // 其中 key setup 和 response serialization 位于本函数边界之外。
   RlweCt make_query(const size_t client_id, RlweCt &query);
 
-  // Public Algorithm 2 ExpandBFV entry: unpack one coefficient-form full-q
-  // packed query into its useful-leaf constants under this server's layout
-  // (fst_dim_sz + L_EP * num_other_dims leaves, capacity 2^expansion_height).
-  // The input ciphertext is only read. Consumers that need RGSW selectors run
-  // their own completion pass over the returned gadget rows (tree PIR:
-  // unpack_tree_query); make_query keeps using the internal path directly.
+  // [公共 Algorithm 2 入口] ExpandBFV：把一条系数形式全 q 打包查询按本服务器布局
+  // 解包成 useful-leaf 常数（fst_dim_sz + L_EP·num_other_dims 片叶，容量
+  // 2^expansion_height）。输入密文只读。需要 RGSW selector 的调用方对返回的
+  // gadget 行自行跑补全（tree PIR：unpack_tree_query）；make_query 仍直接走内部路径。
   std::vector<RlweCt> expand_query(size_t client_id, RlweCt &query) const;
 
-  // Algorithm 3 completion over an expand_query output: selector i's top rows
-  // live at [fst_dim_sz + i*L_EP, fst_dim_sz + (i+1)*L_EP) and are completed
-  // into one full RGSW ciphertext with the client's registered RGSW(s) key.
-  // Single source for the expanded-row layout convention: make_query and the
-  // tree unpack path both call this, so the two cannot drift apart. Non-const
-  // because completion reuses this server's GSWEval conversion state.
+  // [Algorithm 3 补全] 作用在 expand_query 输出上：selector i（0 基）的 top 行位于
+  // [fst_dim_sz + i·L_EP, fst_dim_sz + (i+1)·L_EP)，用该 client 注册的 RGSW(s) 密钥
+  // 补全成完整 RGSW。展开行布局约定的单一来源：make_query 与树 unpack 路径都调用
+  // 这一份实现，两者不可能漂移。非 const：补全复用本服务器的 GSWEval 转换状态。
   std::vector<GSWCt> complete_selectors(size_t client_id,
                                         const std::vector<RlweCt> &expanded);
 
@@ -56,12 +52,9 @@ public:
   // doing any homomorphic work.
   inline const PirParams &get_params() const { return pir_params_; }
 
-  // Final same-ring modulus switch for an externally assembled response
-  // (tree PIR Milestone 5): centered-rescale the full-q ciphertext to the
-  // single small-q limb exactly as make_query does, under the same
-  // SmallQWidth guard. Returns true when the switch was applied; false means
-  // the configuration keeps responses at full q and the ciphertext is
-  // untouched. Must run only after all homomorphic work.
+  // [Tree PIR M5] 对外部组装的响应做最终同环模数切换：与 make_query 完全一致地把
+  // 全 q 密文居中重缩放到单 limb small-q，守卫同为 SmallQWidth。返回 true 表示已
+  // 切换；false 表示该配置下响应保持全 q、密文未动。必须在全部同态运算之后调用。
   bool switch_response_to_small_q(RlweCt &response);
 
   // 只序列化 small-q response ciphertext：先 c0 后 c1，每个 coefficient
