@@ -1,0 +1,47 @@
+profile: H=22, nodes/pt=96, trials=2+7, budget=1.01
+machine: Apple M4 (x86_64), Apple LLVM 17.0.0 (clang-1700.6.3.2), HEXL 1.2.6, commit -
+padded plaintexts: legacy 87612, selected 87668
+
+level  h  N0   Nrest  num_pt   subs  intt  cmux   median_ms  role
+    7  1    2      1       2     1     2     0      0.636  legacy,selected
+    8  2    4      1       4     3     2     0      0.940  legacy,selected
+    9  3    8      1       8     7     2     0      1.621  legacy,selected
+   10  4   16      1      16    15     2     0      2.944  legacy,selected
+   11  5   32      1      32    31     2     0      5.674  legacy,selected
+   12  5   16      3      48    28     6     2      8.861  legacy,selected
+   12  6   64      1      64    63     2     0     11.084  
+   13  5    8     11      88    31    22    10     14.637  legacy
+   13  6   32      3      96    45     6     2     11.866  selected
+   13  7  128      1     128   127     2     0     22.337  
+   14  6   32      6     192    52    12     5     15.506  legacy,selected
+   14  7   64      3     192    78     6     2     17.534  
+   15  6   32     11     352    56    22    10     19.407  legacy,selected
+   15  7   64      6     384    85    12     5     21.143  
+   16  6   32     22     704    62    44    21     25.545  legacy,selected
+   16  7   64     11     704    89    22    10     25.890  
+   17  6   16     86    1376    59   172    85     45.177  legacy
+   17  7   64     22    1408    95    44    21     32.380  selected
+   18  6   16    171    2736    63   342   170     70.702  legacy
+   18  7   64     43    2752   102    86    42     42.621  selected
+   19  7   64     86    5504   108   172    85     63.132  legacy,selected
+   20  7   64    171   10944   112   342   170     95.459  legacy,selected
+   21  7   64    342   21888   119   684   341    163.768  legacy,selected
+   22  7   64    683   43712   124  1366   682    293.923  legacy,selected
+
+predicted PIR-level server ms: legacy 827.93 -> selected 784.28 (+5.27% gain)
+level 13: h 5->6: candidates 11->3, INTT 22->6, CMux 10->2, expansion substitutions 31->45, padded +8 pt, median 14.637->11.866 ms
+level 17: h 6->7: candidates 86->22, INTT 172->44, CMux 85->21, expansion substitutions 59->95, padded +32 pt, median 45.177->32.380 ms
+level 18: h 6->7: candidates 171->43, INTT 342->86, CMux 170->42, expansion substitutions 63->102, padded +16 pt, median 70.702->42.621 ms
+
+A/B layerwise (legacy vs profiled):
+  legacy  : mean 836.92 ms, median 828.43 ms, n=16, policy legacy, padded pt 87612, online bytes 422336, correct=True
+            phases: convert 114.9, expand 127.7, first_dim 313.7, mod_switch 6.0, other_dim 274.2
+            pipeline: convert 114.9, expand 127.7, first_dim_core 218.8, first_dim_finalize 80.4, first_dim_query_ntt 6.2, first_dim_query_pack 8.2, mod_switch 6.0, other_dim 274.2
+  profiled: mean 796.97 ms, median 778.26 ms, n=16, policy profiled, padded pt 87668, online bytes 422336, correct=True
+            phases: convert 106.9, expand 142.0, first_dim 298.9, mod_switch 5.9, other_dim 242.7
+            pipeline: convert 106.9, expand 142.0, first_dim_core 213.7, first_dim_finalize 70.0, first_dim_query_ntt 8.0, first_dim_query_pack 7.1, mod_switch 5.9, other_dim 242.7
+  median gain +6.06%, mean gain +4.77%
+  communication unchanged: True
+  level 13: h 5->6, num_pt 88->96, cmux 10->2
+  level 17: h 6->7, num_pt 1376->1408, cmux 85->21
+  level 18: h 6->7, num_pt 2736->2752, cmux 170->42
