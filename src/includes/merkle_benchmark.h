@@ -1,7 +1,9 @@
 #pragma once
 
+#include "layer_layout_planner.h"
 #include "merkle_baseline.h"
 #include "pir.h"
+#include "pir_profile.h"
 
 #include <chrono>
 #include <cstddef>
@@ -47,6 +49,13 @@ struct MetricSampleStatistics {
   std::optional<double> sample_standard_deviation;
 };
 
+// Public layout of one Merkle level as chosen by the layer planner.
+struct LayerLayoutRecord {
+  size_t level = 0;
+  bool direct_return = false;
+  LayerLayoutFeatures features;
+};
+
 struct BenchmarkCaseResult {
   std::string name;
   bool correctness_passed = false;
@@ -76,6 +85,14 @@ struct BenchmarkCaseResult {
   // (no PIR call); their plain bytes are counted in online_response_bytes.
   uint64_t direct_return_levels = 0;
   uint64_t direct_return_response_bytes = 0;
+  // Exact make_query_profiled stage sums per trial (ms, averaged over
+  // measured trials): expand, convert, first_dim_query_ntt,
+  // first_dim_query_pack, first_dim_core, first_dim_finalize, other_dim,
+  // mod_switch. Sums every PIR call of a path trial.
+  std::map<std::string, double> pipeline_profile_ms;
+  // Layerwise only: which planner policy chose the layouts and what they are.
+  std::string layer_layout_policy;
+  std::vector<LayerLayoutRecord> layers;
   // Paper definition: plaintext database bytes / full-case server time. For a
   // Merkle case, full-case time retrieves the complete H-node path.
   double paper_server_throughput_MBps = 0.0;
@@ -185,7 +202,28 @@ struct MerkleBenchmarkOptions {
   // fixed 4 trials regardless of measured_trials.
   bool run_optional_4gb = false;
   BenchmarkCaseSelection case_selection = BenchmarkCaseSelection::all;
+  // Layerwise layout planner policy (legacy padding-first by default).
+  LayerPlannerConfig layer_planner;
 };
+
+// Offline per-level candidate sweep: one PirServer per (level, candidate),
+// identical leaf samples for every candidate, server make_query time only.
+struct LayerLayoutSweepOptions {
+  size_t leaf_count = size_t{1} << 24;
+  size_t warmups = 2;
+  size_t measured_trials = 7;
+  uint64_t trial_seed = 5723628103747520850ULL;
+  double padding_budget = 1.01;
+  bool include_dominated = false;  // also time Pareto-dominated candidates
+};
+LayerLayoutProfile run_layer_layout_sweep(const LayerLayoutSweepOptions &options);
+// Parses a --layer-padding-budget ratio; rejects anything below 1.0.
+double parse_padding_budget(const std::string &text);
+
+// Public benchmark workload helpers (used by the suite, the sweep and tests).
+MerkleWorkload make_benchmark_workload(size_t leaf_count);
+PirParams make_benchmark_reference(const MerkleWorkload &workload);
+BenchmarkEnvironment detect_benchmark_environment();
 
 // Deterministically samples query IDs without replacement. Keeping the plan
 // public lets tests and benchmark artifacts verify the exact query schedule.
@@ -226,6 +264,9 @@ BenchmarkCaseExecution run_merkle_flat_case(
 BenchmarkCaseExecution run_merkle_layerwise_case(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials);
+BenchmarkCaseExecution run_merkle_layerwise_case(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials, const LayerPlannerConfig &planner);
 
 BenchmarkReport run_merkle_benchmark_suite(
     const MerkleBenchmarkOptions &options);

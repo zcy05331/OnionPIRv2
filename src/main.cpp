@@ -2,6 +2,7 @@
 #include "tests.h"
 
 #include <cstring>
+#include <memory>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -71,6 +72,13 @@ int main(int argc, char *argv[]) {
     std::string benchmark_json;
     bool run_optional_4gb = false;
     BenchmarkCaseSelection benchmark_case = BenchmarkCaseSelection::all;
+    // Layerwise layout planner / sweep flags.
+    std::string layout_profile_json;
+    bool layout_sweep_all = false;
+    double layer_padding_budget = 1.01;
+    std::string layer_layout_policy = "legacy";
+    std::string layer_layout_profile;
+    bool allow_layout_profile_fallback = false;
 
     for (int i = 1; i < argc; ++i) {
       if (std::strcmp(argv[i], "--test") == 0) {
@@ -105,11 +113,50 @@ int main(int argc, char *argv[]) {
         }
       } else if (std::strcmp(argv[i], "--run-optional-4gb") == 0) {
         run_optional_4gb = true;
+      } else if (std::strcmp(argv[i], "--layout-profile-json") == 0) {
+        layout_profile_json = require_value(argc, argv, i);
+      } else if (std::strcmp(argv[i], "--layout-sweep-all") == 0) {
+        layout_sweep_all = true;
+      } else if (std::strcmp(argv[i], "--layer-padding-budget") == 0) {
+        layer_padding_budget =
+            parse_padding_budget(require_value(argc, argv, i));
+      } else if (std::strcmp(argv[i], "--layer-layout-policy") == 0) {
+        layer_layout_policy = require_value(argc, argv, i);
+        if (layer_layout_policy != "legacy" &&
+            layer_layout_policy != "profiled") {
+          throw std::invalid_argument(
+              "--layer-layout-policy must be legacy or profiled");
+        }
+      } else if (std::strcmp(argv[i], "--layer-layout-profile") == 0) {
+        layer_layout_profile = require_value(argc, argv, i);
+      } else if (std::strcmp(argv[i], "--allow-layout-profile-fallback") == 0) {
+        allow_layout_profile_fallback = true;
       } else if (std::strcmp(argv[i], "--no-compress") == 0) {
         // Retained for run.py compatibility. Current query packing has one path.
       } else {
         throw std::invalid_argument(std::string("Unknown option: ") + argv[i]);
       }
+    }
+
+    if (test_name == "layer_layout_sweep") {
+      if (layout_profile_json.empty()) {
+        throw std::invalid_argument(
+            "--test layer_layout_sweep requires --layout-profile-json <path>");
+      }
+      if (num_experiments == 0) {
+        throw std::invalid_argument("--experiments must be positive");
+      }
+      LayerLayoutSweepOptions sweep;
+      sweep.leaf_count = leaf_count;
+      sweep.warmups = warmup;
+      sweep.measured_trials = num_experiments;
+      sweep.trial_seed = trial_seed;
+      sweep.padding_budget = layer_padding_budget;
+      sweep.include_dominated = layout_sweep_all;
+      const LayerLayoutProfile profile = run_layer_layout_sweep(sweep);
+      save_layer_layout_profile(profile, layout_profile_json);
+      std::cout << "Layer layout profile: " << layout_profile_json << '\n';
+      return 0;
     }
 
     if (test_name == "merkle_benchmarks") {
@@ -120,6 +167,19 @@ int main(int argc, char *argv[]) {
       options.trial_seed = trial_seed;
       options.run_optional_4gb = run_optional_4gb;
       options.case_selection = benchmark_case;
+      options.layer_planner.total_padding_budget = layer_padding_budget;
+      options.layer_planner.allow_profile_fallback =
+          allow_layout_profile_fallback;
+      if (layer_layout_policy == "profiled") {
+        if (layer_layout_profile.empty()) {
+          throw std::invalid_argument(
+              "--layer-layout-policy profiled requires "
+              "--layer-layout-profile <path>");
+        }
+        options.layer_planner.policy = LayerLayoutPolicy::profiled;
+        options.layer_planner.profile = std::make_shared<LayerLayoutProfile>(
+            load_layer_layout_profile(layer_layout_profile));
+      }
       BenchmarkReport report = run_merkle_benchmark_suite(options);
       print_benchmark_report(report);
       if (!benchmark_json.empty()) {

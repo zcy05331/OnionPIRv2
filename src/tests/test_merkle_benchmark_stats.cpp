@@ -1,4 +1,5 @@
 #include "tests.h"
+#include <filesystem>
 #include "merkle_benchmark.h"
 
 #include <algorithm>
@@ -214,6 +215,37 @@ void PirTest::test_merkle_benchmark_stats() {
                "layerwise-only selection must execute exactly one case");
   require_test(layerwise_only_report.cases[0].name == "merkle_layerwise",
                "layerwise-only selection must exclude Standard and Flat");
+
+  // Planner CLI helpers and the new JSON fields.
+  require_test(parse_padding_budget("1.01") == 1.01, "budget parses");
+  const auto rejects_budget = [](const char *text) {
+    try {
+      (void)parse_padding_budget(text);
+    } catch (const std::invalid_argument &) {
+      return true;
+    }
+    return false;
+  };
+  require_test(rejects_budget("0.99"), "accepted a padding budget below 1.0");
+  require_test(rejects_budget("abc"), "accepted a non-numeric padding budget");
+  {
+    const std::string path =
+        (std::filesystem::temp_directory_path() / "merkle-stats-layers.json")
+            .string();
+    write_benchmark_report_json(layerwise_only_report, path);
+    std::ifstream file(path);
+    std::stringstream json;
+    json << file.rdbuf();
+    const std::string text = json.str();
+    require_test(text.find("\"layer_layout_policy\": \"legacy\"") !=
+                     std::string::npos,
+                 "JSON omitted the layout policy");
+    require_test(text.find("\"layers\": [{\"level\": 1") != std::string::npos,
+                 "JSON omitted the per-level layouts");
+    require_test(text.find("\"pipeline_profile_ms\": {") != std::string::npos,
+                 "JSON omitted the pipeline profile");
+    std::filesystem::remove(path);
+  }
 
   bool rejected_ungated_large_primary = false;
   try {

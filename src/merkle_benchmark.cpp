@@ -1,6 +1,7 @@
 #include "merkle_benchmark.h"
 
 #include "client.h"
+#include "layer_layout_planner.h"
 #include "logging.h"
 #include "server.h"
 #include "utils.h"
@@ -470,6 +471,37 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
       first_phase = false;
     }
     out << '}';
+    out << ",\n      \"pipeline_profile_ms\": {";
+    bool first_stage = true;
+    for (const auto &[stage, ms] : result.pipeline_profile_ms) {
+      out << (first_stage ? "" : ", ") << '"' << stage << "\": " << ms;
+      first_stage = false;
+    }
+    out << '}';
+    out << ",\n      \"layer_layout_policy\": ";
+    write_string(out, result.layer_layout_policy);
+    out << ",\n      \"layers\": [";
+    for (size_t li = 0; li < result.layers.size(); ++li) {
+      const LayerLayoutRecord &layer = result.layers[li];
+      const LayerLayoutFeatures &f = layer.features;
+      out << (li ? ", " : "") << "{\"level\": " << layer.level
+          << ", \"direct_return\": " << (layer.direct_return ? "true" : "false")
+          << ", \"target_num_pt\": "
+          << (f.padded_plaintexts - f.padding_plaintexts)
+          << ", \"expansion_height\": " << f.expansion_height
+          << ", \"fst_dim_sz\": " << f.first_dim_size
+          << ", \"other_dim_sz\": " << f.other_dim_size
+          << ", \"num_other_dims\": " << f.other_dim_count
+          << ", \"num_pt\": " << f.padded_plaintexts
+          << ", \"padding_plaintexts\": " << f.padding_plaintexts
+          << ", \"physical_scan_bytes\": " << f.physical_scan_bytes
+          << ", \"useful_expanded_ciphertexts\": "
+          << f.useful_expanded_ciphertexts
+          << ", \"expansion_substitutions\": " << f.expansion_substitutions
+          << ", \"inverse_ntts\": " << f.inverse_ntts
+          << ", \"cmux_count\": " << f.cmux_count << '}';
+    }
+    out << ']';
     out << ",\n      \"response_serialize_ms\": "
         << milliseconds(result.timing.response_serialize)
         << ",\n      \"response_load_decrypt_extract_ms\": "
@@ -527,6 +559,7 @@ struct PirCallOutput {
   size_t response_bytes = 0;
   RlwePt plaintext;
   std::optional<MerkleNode> node;
+  PirPipelineProfile pipeline;
 };
 
 struct PathTrialOutput {
@@ -536,6 +569,7 @@ struct PathTrialOutput {
   // Layerwise direct-return levels: served in the clear, no PIR call.
   size_t direct_levels = 0;
   uint64_t plain_response_bytes = 0;
+  PirPipelineProfile pipeline;
 };
 
 size_t flat_target_num_pt(const MerkleWorkload &workload) {
@@ -604,7 +638,8 @@ PirCallOutput timed_pir_call(PirClient &client,
   output.timing.client_query = elapsed_since(start);
 
   start = BenchmarkClock::now();
-  RlweCt response = server.make_query(client_id, query);
+  RlweCt response =
+      server.make_query_profiled(client_id, query, &output.pipeline);
   output.timing.server_compute = elapsed_since(start);
 
   std::stringstream response_stream;
@@ -722,6 +757,21 @@ struct ServerPhaseAccumulator {
   }
 };
 
+std::map<std::string, double> pipeline_profile_average(
+    const PirPipelineProfile &total, size_t trials) {
+  const auto ms = [&](std::chrono::nanoseconds d) {
+    return trials == 0 ? 0.0 : milliseconds(d) / static_cast<double>(trials);
+  };
+  return {{"expand", ms(total.expand)},
+          {"convert", ms(total.convert)},
+          {"first_dim_query_ntt", ms(total.first_dim_query_ntt)},
+          {"first_dim_query_pack", ms(total.first_dim_query_pack)},
+          {"first_dim_core", ms(total.first_dim_core)},
+          {"first_dim_finalize", ms(total.first_dim_finalize)},
+          {"other_dim", ms(total.other_dim)},
+          {"mod_switch", ms(total.mod_switch)}};
+}
+
 BenchmarkCaseExecution run_standard_case(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials) {
@@ -761,9 +811,11 @@ BenchmarkCaseExecution run_standard_case(
   std::vector<size_t> response_shape;
   std::vector<double> server_compute_samples_ms;
   server_compute_samples_ms.reserve(trials.measured_leaf_indices.size());
+  PirPipelineProfile pipeline_total;
   for (size_t leaf : trials.measured_leaf_indices) {
     PirCallOutput output = run_trial(leaf);
     phases.end_trial(true);
+    pipeline_total += output.pipeline;
     add_online_timing(timing_total, output.timing);
     server_compute_samples_ms.push_back(
         milliseconds(output.timing.server_compute));
@@ -794,6 +846,8 @@ BenchmarkCaseExecution run_standard_case(
   result.server_compute_samples_ms =
       std::move(server_compute_samples_ms);
   result.server_phase_ms = phases.averages();
+  result.pipeline_profile_ms = pipeline_profile_average(
+      pipeline_total, trials.measured_leaf_indices.size());
   finalize_case_statistics(result);
   return execution;
 }
@@ -830,6 +884,7 @@ BenchmarkCaseExecution run_merkle_flat_case(
           client, reference, server, client.get_client_id(), plaintext_index,
           node_offset);
       add_online_timing(trial.timing, output.timing);
+      trial.pipeline += output.pipeline;
       trial.response_bytes.push_back(output.response_bytes);
       const MerkleNode expected = synthetic_merkle_node(level, local);
       if (!output.node.has_value() || *output.node != expected) {
@@ -850,9 +905,11 @@ BenchmarkCaseExecution run_merkle_flat_case(
   TrialTiming timing_total;
   std::vector<size_t> response_shape;
   BenchmarkCaseExecution execution;
+  PirPipelineProfile pipeline_total;
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
     phases.end_trial(true);
+    pipeline_total += trial.pipeline;
     add_online_timing(timing_total, trial.timing);
     execution.result.server_compute_samples_ms.push_back(
         milliseconds(trial.timing.server_compute));
@@ -887,6 +944,8 @@ BenchmarkCaseExecution run_merkle_flat_case(
       timing_total, trials.measured_leaf_indices.size());
   result.timing.setup = setup_time;
   result.server_phase_ms = phases.averages();
+  result.pipeline_profile_ms = pipeline_profile_average(
+      pipeline_total, trials.measured_leaf_indices.size());
   result.communication = communication_stats(
       reference, workload.tree_height, response_shape);
   finalize_case_statistics(result);
@@ -896,11 +955,18 @@ BenchmarkCaseExecution run_merkle_flat_case(
 BenchmarkCaseExecution run_merkle_layerwise_case(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials) {
+  return run_merkle_layerwise_case(workload, reference, trials,
+                                   LayerPlannerConfig{});
+}
+
+BenchmarkCaseExecution run_merkle_layerwise_case(
+    const MerkleWorkload &workload, const PirParams &reference,
+    const BenchmarkTrialPlan &trials, const LayerPlannerConfig &planner) {
   validate_trial_plan(workload, reference, trials);
 
   const auto setup_start = BenchmarkClock::now();
   std::vector<LayerLayout> layouts =
-      plan_layer_layouts(workload.tree_height, 96, reference);
+      plan_layer_layouts(workload.tree_height, 96, reference, planner);
   PirClient client(reference);
   SharedPirSessionKeys keys = client.create_session_keys();
   std::vector<std::unique_ptr<PirServer>> servers;
@@ -973,6 +1039,7 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
             client, layout.params, *servers.at(level - 1),
             client.get_client_id(), plaintext_index, node_offset);
         add_online_timing(trial.timing, output.timing);
+        trial.pipeline += output.pipeline;
         trial.response_bytes.push_back(output.response_bytes);
         if (!output.node.has_value() || *output.node != expected) {
           throw std::runtime_error("Layerwise Merkle PIR node mismatch");
@@ -993,9 +1060,11 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   TrialTiming timing_total;
   std::vector<size_t> response_shape;
   BenchmarkCaseExecution execution;
+  PirPipelineProfile pipeline_total;
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
     phases.end_trial(true);
+    pipeline_total += trial.pipeline;
     add_online_timing(timing_total, trial.timing);
     execution.result.server_compute_samples_ms.push_back(
         milliseconds(trial.timing.server_compute));
@@ -1078,6 +1147,16 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
       timing_total, trials.measured_leaf_indices.size());
   result.timing.setup = setup_time;
   result.server_phase_ms = phases.averages();
+  result.pipeline_profile_ms = pipeline_profile_average(
+      pipeline_total, trials.measured_leaf_indices.size());
+  result.layer_layout_policy = layer_layout_policy_name(planner.policy);
+  for (const LayerLayout &layout : layouts) {
+    LayerLayoutRecord record;
+    record.level = layout.level;
+    record.direct_return = layout.direct_return;
+    record.features = compute_layer_layout_features(layout.params);
+    result.layers.push_back(std::move(record));
+  }
   result.communication = communication_stats(
       reference, workload.tree_height - direct_levels, response_shape,
       direct_plain_bytes);
@@ -1100,6 +1179,8 @@ uint64_t splitmix64_next(uint64_t &state) {
   value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
   return value ^ (value >> 31);
 }
+
+}  // namespace
 
 MerkleWorkload make_benchmark_workload(size_t leaf_count) {
   if (leaf_count < 2 || !std::has_single_bit(leaf_count)) {
@@ -1135,10 +1216,13 @@ PirParams make_benchmark_reference(const MerkleWorkload &workload) {
   throw std::runtime_error("No v2 reference layout for benchmark workload");
 }
 
+namespace {
+
 std::vector<BenchmarkCaseResult> execute_case_set(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials, BenchmarkCaseSelection selection,
-    const std::string &name_suffix = "") {
+    const std::string &name_suffix,
+    const LayerPlannerConfig &planner) {
   if (selection != BenchmarkCaseSelection::all &&
       selection != BenchmarkCaseSelection::standard_onionpir &&
       selection != BenchmarkCaseSelection::merkle_paths &&
@@ -1162,7 +1246,7 @@ std::vector<BenchmarkCaseResult> execute_case_set(
 
   if (selection == BenchmarkCaseSelection::merkle_layerwise) {
     BenchmarkCaseExecution layerwise =
-        run_merkle_layerwise_case(workload, reference, trials);
+        run_merkle_layerwise_case(workload, reference, trials, planner);
     layerwise.result.name += name_suffix;
     results.push_back(std::move(layerwise.result));
     return results;
@@ -1171,7 +1255,7 @@ std::vector<BenchmarkCaseResult> execute_case_set(
   BenchmarkCaseExecution flat =
       run_merkle_flat_case(workload, reference, trials);
   BenchmarkCaseExecution layerwise =
-      run_merkle_layerwise_case(workload, reference, trials);
+      run_merkle_layerwise_case(workload, reference, trials, planner);
   validate_layerwise_path_communication(
       flat.result.communication, layerwise.result.communication,
       layerwise.result.direct_return_levels,
@@ -1287,6 +1371,42 @@ uint64_t estimate_merkle_benchmark_peak_bytes(size_t leaf_count) {
   return std::max(flat_bytes, layerwise_bytes);
 }
 
+BenchmarkEnvironment detect_benchmark_environment() {
+  BenchmarkEnvironment environment;
+  environment.commit = environment_value("ONIONPIR_BENCH_COMMIT");
+  environment.branch = environment_value("ONIONPIR_BENCH_BRANCH");
+  environment.build_type = "Benchmark";
+  environment.config = "CONFIG_N2048_K1_COMP";
+#if defined(__x86_64__)
+  environment.architecture = "x86_64";
+#elif defined(__aarch64__) || defined(__arm64__)
+  environment.architecture = "arm64";
+#else
+  environment.architecture = "unknown";
+#endif
+  environment.process_architecture =
+      environment_value("ONIONPIR_BENCH_PROCESS_ARCH", "x86_64");
+  environment.operating_system =
+      environment_value("ONIONPIR_BENCH_OS");
+  environment.cpu = environment_value("ONIONPIR_BENCH_CPU");
+  environment.compiler =
+      environment_value("ONIONPIR_BENCH_COMPILER");
+  environment.cmake_version =
+      environment_value("ONIONPIR_BENCH_CMAKE");
+#if defined(ONIONPIR_USE_HEXL)
+  environment.hexl_enabled = true;
+#else
+  environment.hexl_enabled = false;
+#endif
+  environment.hexl_version = "1.2.6";
+  environment.hexl_path = environment_value("ONIONPIR_BENCH_HEXL_PATH");
+  environment.rosetta = running_under_rosetta();
+  environment.non_native_label = environment.rosetta
+      ? "x86_64 + Intel HEXL under Rosetta 2 on Apple M4; non-native result"
+      : "This run is not the frozen Apple M4 Rosetta benchmark environment";
+  return environment;
+}
+
 BenchmarkReport run_merkle_benchmark_suite(
     const MerkleBenchmarkOptions &options) {
   if (options.leaf_count > (size_t{1} << 24)) {
@@ -1305,37 +1425,7 @@ BenchmarkReport run_merkle_benchmark_suite(
   // v2 corrects paper_server_throughput_MBps to database_bytes/server_time and
   // retains repeated work as the explicit paper_scan_throughput diagnostic.
   report.schema_version = "onionpir-merkle-baselines-v2";
-  report.environment.commit = environment_value("ONIONPIR_BENCH_COMMIT");
-  report.environment.branch = environment_value("ONIONPIR_BENCH_BRANCH");
-  report.environment.build_type = "Benchmark";
-  report.environment.config = "CONFIG_N2048_K1_COMP";
-#if defined(__x86_64__)
-  report.environment.architecture = "x86_64";
-#elif defined(__aarch64__) || defined(__arm64__)
-  report.environment.architecture = "arm64";
-#else
-  report.environment.architecture = "unknown";
-#endif
-  report.environment.process_architecture =
-      environment_value("ONIONPIR_BENCH_PROCESS_ARCH", "x86_64");
-  report.environment.operating_system =
-      environment_value("ONIONPIR_BENCH_OS");
-  report.environment.cpu = environment_value("ONIONPIR_BENCH_CPU");
-  report.environment.compiler =
-      environment_value("ONIONPIR_BENCH_COMPILER");
-  report.environment.cmake_version =
-      environment_value("ONIONPIR_BENCH_CMAKE");
-#if defined(ONIONPIR_USE_HEXL)
-  report.environment.hexl_enabled = true;
-#else
-  report.environment.hexl_enabled = false;
-#endif
-  report.environment.hexl_version = "1.2.6";
-  report.environment.hexl_path = environment_value("ONIONPIR_BENCH_HEXL_PATH");
-  report.environment.rosetta = running_under_rosetta();
-  report.environment.non_native_label = report.environment.rosetta
-      ? "x86_64 + Intel HEXL under Rosetta 2 on Apple M4; non-native result"
-      : "This run is not the frozen Apple M4 Rosetta benchmark environment";
+  report.environment = detect_benchmark_environment();
 
   report.paper_alignment.paper =
       "OnionPIRv2: Efficient Single-Server PIR (2025/1142)";
@@ -1369,7 +1459,7 @@ BenchmarkReport run_merkle_benchmark_suite(
 
   append_case_set(report.cases,
                   execute_case_set(workload, reference, trials,
-                                   options.case_selection));
+                                   options.case_selection, "", options.layer_planner));
 
   OptionalWorkloadResult optional;
   optional.leaf_count = size_t{1} << 26;
@@ -1410,7 +1500,7 @@ BenchmarkReport run_merkle_benchmark_suite(
           report.cases,
           execute_case_set(optional_workload, optional_reference,
                            optional_trials, options.case_selection,
-                           "_optional_4gb"));
+                           "_optional_4gb", options.layer_planner));
     }
   }
   report.workload.optional_workloads.push_back(std::move(optional));
@@ -1443,6 +1533,19 @@ void print_benchmark_report(const BenchmarkReport &report) {
               << phase("convert") << ',' << phase("first_dim") << ','
               << phase("other_dim") << ',' << phase("mod_switch") << '\n';
   }
+  for (const BenchmarkCaseResult &result : report.cases) {
+    if (result.layers.empty()) continue;
+    uint64_t padded = 0;
+    for (const LayerLayoutRecord &layer : result.layers) {
+      padded += layer.features.padded_plaintexts;
+    }
+    std::cout << result.name << " layout policy " << result.layer_layout_policy
+              << ": " << padded << " padded plaintexts, heights";
+    for (const LayerLayoutRecord &layer : result.layers) {
+      std::cout << ' ' << layer.features.expansion_height;
+    }
+    std::cout << '\n';
+  }
   for (const OptionalWorkloadResult &optional :
        report.workload.optional_workloads) {
     std::cout << "optional " << optional.paper_row << ": " << optional.status;
@@ -1451,4 +1554,136 @@ void print_benchmark_report(const BenchmarkReport &report) {
     }
     std::cout << '\n';
   }
+}
+
+double parse_padding_budget(const std::string &text) {
+  size_t parsed = 0;
+  double value = 0.0;
+  try {
+    value = std::stod(text, &parsed);
+  } catch (const std::exception &) {
+    throw std::invalid_argument("--layer-padding-budget requires a ratio");
+  }
+  if (parsed != text.size() || !(value >= 1.0) || !std::isfinite(value)) {
+    throw std::invalid_argument(
+        "--layer-padding-budget must be a finite ratio >= 1.0");
+  }
+  return value;
+}
+
+LayerLayoutProfile run_layer_layout_sweep(
+    const LayerLayoutSweepOptions &options) {
+  if (options.measured_trials == 0) {
+    throw std::invalid_argument("layer layout sweep needs measured trials");
+  }
+  if (!(options.padding_budget >= 1.0)) {
+    throw std::invalid_argument("layer padding budget must be >= 1.0");
+  }
+  const MerkleWorkload workload = make_benchmark_workload(options.leaf_count);
+  const PirParams reference = make_benchmark_reference(workload);
+  const BenchmarkTrialPlan trials = make_benchmark_trial_plan(
+      workload.leaf_count, options.warmups, options.measured_trials,
+      options.trial_seed);
+  constexpr size_t kNodesPerPt = 96;
+
+  LayerLayoutProfile profile;
+  profile.environment = detect_layer_layout_environment(
+      reference, environment_value("ONIONPIR_BENCH_COMMIT"), "Benchmark",
+      "CONFIG_N2048_K1_COMP");
+  profile.tree_height = workload.tree_height;
+  profile.nodes_per_plaintext = kNodesPerPt;
+  profile.warmups = options.warmups;
+  profile.measured_trials = options.measured_trials;
+  profile.trial_seed = options.trial_seed;
+  profile.padding_budget = options.padding_budget;
+
+  // One client and one shared helper-key bundle for every candidate server.
+  PirClient client(reference);
+  SharedPirSessionKeys keys = client.create_session_keys();
+
+  for (size_t level = 1; level <= workload.tree_height; ++level) {
+    const std::vector<LayerLayoutCandidate> candidates =
+        enumerate_layer_layout_candidates(level, kNodesPerPt, reference);
+    const size_t legacy = legacy_layer_layout_candidate(candidates);
+    if (candidates[legacy].layout.direct_return) continue;  // no PIR here
+    const std::vector<LayerLayoutCandidate> frontier =
+        pareto_layer_layout_candidates(candidates);
+    const auto on_frontier = [&](const LayerLayoutCandidate &c) {
+      for (const LayerLayoutCandidate &f : frontier) {
+        if (f.features.expansion_height == c.features.expansion_height) {
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const LayerLayoutCandidate &candidate : candidates) {
+      const bool dominated = !on_frontier(candidate);
+      if (dominated && !options.include_dominated) continue;
+      const PirParams &params = candidate.layout.params;
+      // Sequential, memory-bounded: exactly one candidate server is alive.
+      auto server = std::make_unique<PirServer>(params);
+      server->set_client_session_keys(client.get_client_id(), keys);
+      PlaintextSource source = [&](size_t index, RlwePt &out) {
+        out = make_layer_merkle_plaintext(level, index, workload, params);
+      };
+      server->load_data(candidate.layout.target_num_pt, source);
+
+      const auto run_query = [&](size_t leaf) {
+        const size_t local =
+            merkle_sibling_local(leaf, workload.tree_height, level);
+        RlweCt query =
+            client.fast_generate_query(params, local / kNodesPerPt);
+        const auto start = BenchmarkClock::now();
+        RlweCt response = server->make_query(client.get_client_id(), query);
+        const double ms = milliseconds(elapsed_since(start));
+        // Correctness outside the timer: the sibling must decode exactly.
+        std::stringstream wire;
+        (void)server->save_resp_to_stream(response, wire);
+        const RlwePt pt = client.decrypt_mod_q(client.load_resp_from_stream(wire));
+        if (decode_merkle_node(pt, local % kNodesPerPt, params) !=
+            synthetic_merkle_node(level, local)) {
+          throw std::runtime_error(
+              "layer layout sweep: candidate response decoded to the wrong "
+              "sibling at level " + std::to_string(level));
+        }
+        return ms;
+      };
+      for (size_t leaf : trials.warmup_leaf_indices) (void)run_query(leaf);
+      LayerLayoutMeasurement measurement;
+      measurement.level = level;
+      measurement.features = candidate.features;
+      measurement.dominated = dominated;
+      for (size_t leaf : trials.measured_leaf_indices) {
+        measurement.server_samples_ms.push_back(run_query(leaf));
+      }
+      std::vector<double> sorted = measurement.server_samples_ms;
+      std::sort(sorted.begin(), sorted.end());
+      const size_t n = sorted.size();
+      measurement.median_server_ms =
+          n % 2 == 1 ? sorted[n / 2] : 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
+      BENCH_PRINT("layer " << level << " h=" << candidate.features.expansion_height
+                  << " N0=" << candidate.features.first_dim_size
+                  << " Nrest=" << candidate.features.other_dim_size
+                  << " num_pt=" << candidate.features.padded_plaintexts
+                  << (dominated ? " (dominated)" : "")
+                  << ": median " << measurement.median_server_ms << " ms");
+      profile.measurements.push_back(std::move(measurement));
+    }
+  }
+
+  const LayerLayoutSelection selection = select_layer_layouts(
+      profile, workload.tree_height, kNodesPerPt, reference,
+      options.padding_budget);
+  profile.selected_expansion_heights = selection.expansion_heights;
+  profile.legacy_total_padded_plaintexts =
+      selection.legacy_total_padded_plaintexts;
+  profile.selected_total_padded_plaintexts =
+      selection.selected_total_padded_plaintexts;
+  BENCH_PRINT("layer layout sweep: legacy padded plaintexts "
+              << selection.legacy_total_padded_plaintexts << ", selected "
+              << selection.selected_total_padded_plaintexts
+              << ", predicted server ms legacy "
+              << selection.predicted_legacy_ms << " -> selected "
+              << selection.predicted_selected_ms);
+  return profile;
 }
