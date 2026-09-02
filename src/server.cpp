@@ -1,4 +1,6 @@
 #include "server.h"
+
+#include <chrono>
 #include "gsw.h"
 #include "rlwe.h"
 #include "utils.h"
@@ -311,7 +313,8 @@ void PirServer::prep_query_composite(const std::vector<RlweCt> &fst_dim_query,
 // delayed modulus optimization lives inside the matmul kernels: they accumulate
 // only as far as the accumulator width allows, then reduce mod q.
 std::vector<RlweCt>
-PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
+PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query,
+                              PirPipelineProfile *profile) {
   const size_t fst_dim_sz = pir_params_.get_fst_dim_sz();  // number of plaintexts in the first dimension
   const size_t other_dim_sz = pir_params_.get_other_dim_sz();  // number of plaintexts in the other dimensions
   const size_t K = pir_params_.K();
@@ -328,6 +331,17 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
     // the same 32x32->64 kernel under q1 and q2 to compute residue outputs.
     // inter_to_cts_composite CRT-composes those residues back to logical mod q
     // before INTT. Later PIR stages still see K=1 ciphertexts.
+    // 可选的子阶段计时：只在既有边界读时钟。
+    using ProfileClock = std::chrono::steady_clock;
+    ProfileClock::time_point mark;
+    if (profile) mark = ProfileClock::now();
+    const auto lap = [&](std::chrono::nanoseconds PirPipelineProfile::*slot) {
+      if (!profile) return;
+      const auto now = ProfileClock::now();
+      profile->*slot += now - mark;
+      mark = now;
+    };
+
     const uint64_t q = rns_mods[0];
     for (size_t i = 0; i < fst_dim_query.size(); ++i) {
       RlweCt &ct = fst_dim_query[i];
@@ -335,6 +349,7 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
       utils::ntt_fwd(ct.c1.data(), N, q);
       ct.ntt_form = true;
     }
+    lap(&PirPipelineProfile::first_dim_query_ntt);
 
     std::fill(inter_res_lo_.begin(), inter_res_lo_.end(), 0);
     std::fill(inter_res_hi_.begin(), inter_res_hi_.end(), 0);
@@ -344,6 +359,7 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
     std::vector<uint32_t> query_hi(fst_dim_sz * one_ct_sz);
     prep_query_composite(fst_dim_query, query_lo.data(), query_hi.data());
     TIME_END(FST_DIM_PREP);
+    lap(&PirPipelineProfile::first_dim_query_pack);
 
     TIME_START(CORE_TIME);
     level_mat_mat_32(db_lo_.get(), query_lo.data(), inter_res_lo_.data(),
@@ -351,14 +367,26 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
     level_mat_mat_32(db_hi_.get(), query_hi.data(), inter_res_hi_.data(),
                      other_dim_sz, fst_dim_sz, coeff_val_cnt, crt.q2);
     TIME_END(CORE_TIME);
+    lap(&PirPipelineProfile::first_dim_core);
 
     TIME_START(FST_INTER_TO_CTS_TIME);
     std::vector<RlweCt> result;
     result.reserve(other_dim_sz);
     inter_to_cts_composite(result, inter_res_lo_.data(), inter_res_hi_.data());
     TIME_END(FST_INTER_TO_CTS_TIME);
+    lap(&PirPipelineProfile::first_dim_finalize);
     return result;
   }
+
+  using ProfileClock = std::chrono::steady_clock;
+  ProfileClock::time_point mark;
+  if (profile) mark = ProfileClock::now();
+  const auto lap = [&](std::chrono::nanoseconds PirPipelineProfile::*slot) {
+    if (!profile) return;
+    const auto now = ProfileClock::now();
+    profile->*slot += now - mark;
+    mark = now;
+  };
 
   // fill the intermediate result with zeros
   std::fill(inter_res_.begin(), inter_res_.end(), 0);
@@ -368,6 +396,7 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   std::vector<db_coeff_t> query_data(fst_dim_sz * one_ct_sz);
   prep_query(fst_dim_query, query_data);
   TIME_END(FST_DIM_PREP);
+  lap(&PirPipelineProfile::first_dim_query_pack);
 
   /*
   Standard path for 2025 Algorithm 4: instead of treating each DB matrix entry
@@ -393,6 +422,7 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   TIME_START(CORE_TIME);
   level_mat_mat(&db_mat, &query_mat, &inter_res_mat, level_qs.data());
   TIME_END(CORE_TIME);
+  lap(&PirPipelineProfile::first_dim_core);
 
   // ========== transform the intermediate to coefficient form. Delay the modulus operation ==========
   TIME_START(FST_INTER_TO_CTS_TIME);
@@ -400,6 +430,7 @@ PirServer::evaluate_first_dim(std::vector<RlweCt> &fst_dim_query) {
   result.reserve(other_dim_sz);
   inter_to_cts(result, inter_res_.data());
   TIME_END(FST_INTER_TO_CTS_TIME);
+  lap(&PirPipelineProfile::first_dim_finalize);
 
   return result;
 }
@@ -929,10 +960,25 @@ RlwePt PirServer::direct_get_original_plaintext(const size_t plaintext_idx) cons
 
 
 RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
+  return make_query_profiled(client_id, query, nullptr);
+}
+
+RlweCt PirServer::make_query_profiled(const size_t client_id, RlweCt &query,
+                                      PirPipelineProfile *profile) {
   // 这是 Algorithm 4 executable skeleton。Function boundary：
   //   entry 前外部负责：client key setup 与 packed query transport
   //   本函数内部负责：Algorithm 2 expansion、Algorithm 3 completion、lines 4-15 eval
   //   return 后外部负责：save_resp_to_stream 做 response serialization
+  // profile != nullptr 时只在既有阶段边界上读时钟，不改变任何运算顺序。
+  using ProfileClock = std::chrono::steady_clock;
+  ProfileClock::time_point mark;
+  if (profile) mark = ProfileClock::now();
+  const auto lap = [&](std::chrono::nanoseconds PirPipelineProfile::*slot) {
+    if (!profile) return;
+    const auto now = ProfileClock::now();
+    profile->*slot += now - mark;
+    mark = now;
+  };
 
   // ========================== Expansion & conversion ==========================
   // 阶段 1 / Algorithm 2 ExpandBFV：把一条 full-q packed BFV query unpack 成
@@ -940,6 +986,7 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   TIME_START(EXPAND_TIME);
   std::vector<RlweCt> query_vector = fast_expand_qry(client_id, query);
   TIME_END(EXPAND_TIME);
+  lap(&PirPipelineProfile::expand);
 
   // 阶段 2 / Algorithm 3 completion：把 expanded BFV selector rows 转成完整
   // RGSW ciphertexts；bottom half 由已注册到 server 的 client RGSW(s) key 补齐。
@@ -948,21 +995,26 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   TIME_START(CONVERT_TIME);
   std::vector<GSWCt> gsw_vec = complete_selectors(client_id, query_vector);
   TIME_END(CONVERT_TIME);
+  lap(&PirPipelineProfile::convert);
 
   // ========================== Evaluations ==========================
   // 阶段 3 / Algorithm 4 lines 4-6：只取前 N0 个 expanded BFV ciphertexts
   // 做 database matrix-vector product。result vector 是 Nrest encrypted
   // 这些 candidates 每个对应一个 remaining-dimensional position。
+  // 首维内部的四个子阶段（query NTT / pack / core / finalize）由
+  // evaluate_first_dim 自己记入 profile。
   TIME_START(FST_DIM_TIME);
   query_vector.resize(pir_params_.get_fst_dim_sz());
-  std::vector<RlweCt> mid_db = evaluate_first_dim(query_vector);
+  std::vector<RlweCt> mid_db = evaluate_first_dim(query_vector, profile);
   TIME_END(FST_DIM_TIME);
+  if (profile) mark = ProfileClock::now();
 
   // 阶段 4 / Algorithm 4 lines 7-14：每个 RGSW selector bit 驱动一层 MUX，
   // 在 remaining encrypted candidates 上持续归约，直到只剩一条 ciphertext。
   TIME_START(OTHER_DIM_TIME);
   RlweCt result = evaluate_other_dim(mid_db, gsw_vec);
   TIME_END(OTHER_DIM_TIME);
+  lap(&PirPipelineProfile::other_dim);
 
   // ========================== Post-processing ==========================
   TIME_START(MOD_SWITCH);
@@ -977,8 +1029,8 @@ RlweCt PirServer::make_query(const size_t client_id, RlweCt &query) {
   }
 
   TIME_END(MOD_SWITCH);
+  lap(&PirPipelineProfile::mod_switch);
   DEBUG_PRINT("Modulus switching done.");
-
   return result;
 }
 

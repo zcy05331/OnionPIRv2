@@ -85,6 +85,8 @@ class PirTest {
     void test_shared_session();
     void test_merkle_benchmark_stats();
     void test_merkle_integration();
+    // Stage-profiled make_query is bit-for-bit the plain pipeline.
+    void test_pir_profile();
     void test_bv_keyswitch();
     void test_hexl_ntt();
     void test_utils_arith();

@@ -31,6 +31,7 @@ void PirTest::run_test(const std::string &test_name) {
   else if (test_name == "shared_session")      test_shared_session();
   else if (test_name == "merkle_benchmark_stats") test_merkle_benchmark_stats();
   else if (test_name == "merkle_integration")  test_merkle_integration();
+  else if (test_name == "pir_profile")         test_pir_profile();
   else if (test_name == "bv_ks")             test_bv_keyswitch();
   else if (test_name == "cpu_info")          print_cpu_info();
   else if (test_name == "hexl_ntt")          test_hexl_ntt();

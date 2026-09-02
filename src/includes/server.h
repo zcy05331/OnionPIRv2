@@ -5,6 +5,7 @@
 #include "bv_keyswitch.h"
 #include "pir_session.h"
 #include "aligned_allocator.h"
+#include "pir_profile.h"
 #include <functional>
 #include <map>
 #include <sstream>
@@ -33,6 +34,10 @@ public:
   // first-dim evaluation、高维 MUX reduction，以及最终 ModSwitch 到 small-q。
   // 其中 key setup 和 response serialization 位于本函数边界之外。
   RlweCt make_query(const size_t client_id, RlweCt &query);
+  // Same pipeline, same operation order, same result as make_query; when
+  // profile is non-null every stage's wall time is accumulated into it.
+  RlweCt make_query_profiled(const size_t client_id, RlweCt &query,
+                             PirPipelineProfile *profile);
 
   // [公共 Algorithm 2 入口] ExpandBFV：把一条系数形式全 q 打包查询按本服务器布局
   // 解包成 useful-leaf 常数（fst_dim_sz + L_EP·num_other_dims 片叶，容量
@@ -81,7 +86,8 @@ public:
   // one-hot vector 之间做 homomorphic matrix-vector multiplication。输入
   // selection_vector 保持 coefficient form；输出 candidates 是按剩余维度索引的
   // coefficient-form BFV ciphertexts。
-  std::vector<RlweCt> evaluate_first_dim(std::vector<RlweCt> &selection_vector);
+  std::vector<RlweCt> evaluate_first_dim(std::vector<RlweCt> &selection_vector,
+                                         PirPipelineProfile *profile = nullptr);
 
   /**
    * @brief 处理 Algorithm 4 lines 7-14，用于 remaining dimensions。
