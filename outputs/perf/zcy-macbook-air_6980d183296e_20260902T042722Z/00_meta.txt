@@ -1,0 +1,10 @@
+commit:      6980d183296ecda11f503a0ebdc58d786fb4c3f9 (main)
+utc:         20260902T042722Z
+os:          ProductName:		macOS;ProductVersion:		15.7.7;BuildVersion:		24G720;
+cpu:         Apple M4  mem=17179869184B
+arch:        arm64 rosetta=1
+compiler:    Apple clang version 17.0.0 (clang-1700.6.3.2)
+cmake:       cmake version 4.3.3
+hexl:        /Users/little_sun/Desktop/little_sun/26Summer/OnionPIRv2/hexl_install/lib64/cmake/hexl-1.2.6 NOAVX512=OFF
+config:      CONFIG_N2048_K1_COMP
+knobs:       trials=16 warmup=3 seed=5723628103747520850 scales='256mb' case=all

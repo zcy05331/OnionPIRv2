@@ -1,0 +1,10 @@
+Running test: tree_compress
+==============================================================================
+                    test_tree_compress(Benchmark build)
+==============================================================================
+Compressed-response noise: max 43 of bound 508
+Noise budget after decryption: 3 (max noise: 52)
+Compressed-response noise: max 48 of bound 508
+Noise budget after decryption: 2 (max noise: 66)
+response bytes: plain 11264 -> compressed 5632 (payload 480 B)
+Compressed-response noise: max 37 of bound 508

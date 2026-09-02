@@ -1,0 +1,23 @@
+Running test: cpu_info
+==============================================================================
+                    print_cpu_info(Benchmark build)
+==============================================================================
+==============================================================================
+CPU Information:
+==============================================================================
+Vendor ID: 
+Model Name: 
+CPU Count: 0
+
+Detailed CPU Information:
+sh: lscpu: command not found
+
+Memory Information:
+sh: free: command not found
+
+Cache Information:
+sh: lscpu: command not found
+
+CPU Flags (Instruction Sets):
+sh: lscpu: command not found
+==============================================================================

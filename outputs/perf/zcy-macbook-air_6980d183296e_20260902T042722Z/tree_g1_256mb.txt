@@ -1,0 +1,50 @@
+Running test: tree_bench
+==============================================================================
+                    test_tree_benchmark(Benchmark build)
+==============================================================================
+Noise budget after decryption: 2 (max noise: 65)
+Noise budget after decryption: 3 (max noise: 56)
+Noise budget after decryption: 3 (max noise: 49)
+Noise budget after decryption: 3 (max noise: 50)
+Noise budget after decryption: 2 (max noise: 73)
+Noise budget after decryption: 3 (max noise: 59)
+Noise budget after decryption: 2 (max noise: 64)
+Noise budget after decryption: 3 (max noise: 50)
+Noise budget after decryption: 2 (max noise: 67)
+Noise budget after decryption: 3 (max noise: 52)
+Noise budget after decryption: 3 (max noise: 47)
+Noise budget after decryption: 3 (max noise: 61)
+Noise budget after decryption: 2 (max noise: 66)
+Noise budget after decryption: 3 (max noise: 59)
+Noise budget after decryption: 3 (max noise: 52)
+Noise budget after decryption: 3 (max noise: 57)
+Noise budget after decryption: 3 (max noise: 44)
+Noise budget after decryption: 3 (max noise: 57)
+Noise budget after decryption: 3 (max noise: 56)
+tree MVP benchmark: N=2^24 leaves, L=24, N0=128, b=4, w=218, W=256
+database: 4106 packed plaintexts, g=1 payload 64 MiB coefficient storage, setup 266.921 ms
+trials: 16 measured after 3 warmup, leaves 16 distinct
+client query avg 0.113172 ms
+server unpack (expand+convert) avg 81.4808 ms
+server path (select+rotate+project+pack) avg 120.272 ms
+server total avg 201.753 ms; samples(path):
+  path 90.8151 ms
+  path 100.492 ms
+  path 95.1005 ms
+  path 94.6276 ms
+  path 95.463 ms
+  path 95.2257 ms
+  path 99.012 ms
+  path 96.8918 ms
+  path 99.2545 ms
+  path 98.0033 ms
+  path 107.253 ms
+  path 146.255 ms
+  path 139.699 ms
+  path 172.523 ms
+  path 191.495 ms
+  path 202.238 ms
+server path breakdown avg (ms): pyramid 10.288471 scan 16.465279 fold 6.914132 rotate 47.555451 project 38.048823 pack 0.108878 switch 0.512672
+  stages sum 119.894 ms of path avg 120.272 ms (remainder = glue/alloc)
+client extract avg 0.0982736 ms
+communication: query 14880 B (modeled, 1 ciphertext), response 11264 B (actual wire codec, small_q=yes), helper keys 1607040 B (modeled, 11 BV + GSW)
