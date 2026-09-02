@@ -282,6 +282,7 @@ std::vector<LayerLayout> plan_layer_layouts(
       throw std::runtime_error("No scheme-compatible PIR layout for Merkle layer");
     }
     layouts.push_back({level, node_count, target_num_pt, best_params});
+    layouts.back().direct_return = node_count <= nodes_per_pt;
   }
   return layouts;
 }

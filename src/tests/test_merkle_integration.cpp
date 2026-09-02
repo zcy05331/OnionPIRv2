@@ -57,8 +57,16 @@ void PirTest::test_merkle_integration() {
                           small_trials.measured_leaf_indices[i],
                           small.tree_height);
   }
-  validate_matching_path_communication(flat.result.communication,
-                                       layerwise.result.communication);
+  // Levels 1..6 (2..64 nodes) fit one 96-node plaintext and are returned in
+  // the clear; levels 7 and 8 stay PIR calls.
+  require_test(layerwise.result.direct_return_levels == 6,
+               "H=8 direct-return level count");
+  require_test(layerwise.result.communication.pir_call_count == 2,
+               "H=8 layerwise PIR call count");
+  validate_layerwise_path_communication(
+      flat.result.communication, layerwise.result.communication,
+      layerwise.result.direct_return_levels,
+      layerwise.result.direct_return_response_bytes);
 
   // H=16 forces remaining-dimension RGSW MUX work; a small-only fixture could
   // otherwise pass while testing only the first-dimension path.
@@ -81,6 +89,10 @@ void PirTest::test_merkle_integration() {
   require_test(flat_multi.measured_paths == layerwise_multi.measured_paths,
                "H=16 flat/layerwise path mismatch");
   require_expected_path(flat_multi.measured_paths.at(0), 48879, 16);
-  validate_matching_path_communication(flat_multi.result.communication,
-                                       layerwise_multi.result.communication);
+  require_test(layerwise_multi.result.direct_return_levels == 6,
+               "H=16 direct-return level count");
+  validate_layerwise_path_communication(
+      flat_multi.result.communication, layerwise_multi.result.communication,
+      layerwise_multi.result.direct_return_levels,
+      layerwise_multi.result.direct_return_response_bytes);
 }

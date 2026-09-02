@@ -72,6 +72,10 @@ struct BenchmarkCaseResult {
   // every PIR call of one trial, so the phases add up to server_compute_ms
   // minus glue.
   std::map<std::string, double> server_phase_ms;
+  // Layerwise only: levels that fit one plaintext are returned in the clear
+  // (no PIR call); their plain bytes are counted in online_response_bytes.
+  uint64_t direct_return_levels = 0;
+  uint64_t direct_return_response_bytes = 0;
   // Paper definition: plaintext database bytes / full-case server time. For a
   // Merkle case, full-case time retrieves the complete H-node path.
   double paper_server_throughput_MBps = 0.0;
@@ -189,11 +193,22 @@ BenchmarkTrialPlan make_benchmark_trial_plan(size_t leaf_count, size_t warmups,
                                              size_t measured, uint64_t seed);
 
 uint64_t modeled_helper_key_bytes(const PirParams &reference);
+// plain_response_bytes: response bytes sent outside any PIR call (the
+// layerwise direct-return levels); they join online_response_bytes_actual.
 CommunicationStats communication_stats(
     const PirParams &reference, size_t pir_call_count,
-    const std::vector<size_t> &actual_response_bytes);
+    const std::vector<size_t> &actual_response_bytes,
+    uint64_t plain_response_bytes = 0);
 void validate_matching_path_communication(const CommunicationStats &flat,
                                           const CommunicationStats &layerwise);
+// Layerwise retrieves the same path as flat with direct_levels fewer PIR
+// calls; checks the totals are exactly the flat per-call costs times the
+// remaining calls plus the plain bytes. Reduces to the exact match above when
+// direct_levels == 0.
+void validate_layerwise_path_communication(const CommunicationStats &flat,
+                                           const CommunicationStats &layerwise,
+                                           size_t direct_levels,
+                                           uint64_t direct_plain_bytes);
 MetricSampleStatistics summarize_metric_samples(
     const std::vector<double> &samples);
 void finalize_case_statistics(BenchmarkCaseResult &result);

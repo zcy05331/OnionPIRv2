@@ -26,6 +26,11 @@ struct LayerLayout {
   size_t node_count;
   size_t target_num_pt;
   PirParams params;
+  // A level whose node_count fits one plaintext is handed to the client in
+  // the clear instead of being served by PIR: sending the whole level reveals
+  // nothing about which node is wanted, and it costs node_count * 32 bytes
+  // instead of a query plus a ciphertext response.
+  bool direct_return = false;
 };
 
 // Return a level-local sibling index, not a global heap index.

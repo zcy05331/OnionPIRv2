@@ -159,7 +159,8 @@ uint64_t modeled_helper_key_bytes(const PirParams &reference) {
 
 CommunicationStats communication_stats(
     const PirParams &reference, size_t pir_call_count,
-    const std::vector<size_t> &actual_response_bytes) {
+    const std::vector<size_t> &actual_response_bytes,
+    uint64_t plain_response_bytes) {
   if (pir_call_count == 0) {
     throw std::invalid_argument("PIR call count must be positive");
   }
@@ -179,6 +180,9 @@ CommunicationStats communication_stats(
         result.online_response_bytes_actual, bytes,
         "actual online response bytes");
   }
+  result.online_response_bytes_actual = checked_add(
+      result.online_response_bytes_actual, plain_response_bytes,
+      "plain online response bytes");
   result.online_total_bytes_mixed = checked_add(
       result.online_query_bytes_modeled, result.online_response_bytes_actual,
       "mixed online bytes");
@@ -204,6 +208,41 @@ void validate_matching_path_communication(const CommunicationStats &flat,
           layerwise.first_session_total_bytes_mixed) {
     throw std::invalid_argument(
         "Flat and layerwise paths have different communication totals");
+  }
+}
+
+void validate_layerwise_path_communication(const CommunicationStats &flat,
+                                           const CommunicationStats &layerwise,
+                                           size_t direct_levels,
+                                           uint64_t direct_plain_bytes) {
+  if (direct_levels == 0) {
+    validate_matching_path_communication(flat, layerwise);
+    return;
+  }
+  if (flat.pir_call_count <= direct_levels ||
+      layerwise.pir_call_count != flat.pir_call_count - direct_levels ||
+      flat.modeled_query_bytes_per_pir !=
+          layerwise.modeled_query_bytes_per_pir ||
+      flat.helper_key_bytes_modeled != layerwise.helper_key_bytes_modeled ||
+      flat.online_response_bytes_actual % flat.pir_call_count != 0) {
+    throw std::invalid_argument(
+        "Layerwise direct-return accounting does not match the flat path");
+  }
+  const uint64_t per_response =
+      flat.online_response_bytes_actual / flat.pir_call_count;
+  const uint64_t expected_response =
+      per_response * layerwise.pir_call_count + direct_plain_bytes;
+  const uint64_t expected_query =
+      layerwise.pir_call_count * layerwise.modeled_query_bytes_per_pir;
+  if (layerwise.online_response_bytes_actual != expected_response ||
+      layerwise.online_query_bytes_modeled != expected_query ||
+      layerwise.online_total_bytes_mixed !=
+          expected_query + expected_response ||
+      layerwise.first_session_total_bytes_mixed !=
+          layerwise.helper_key_bytes_modeled +
+              layerwise.online_total_bytes_mixed) {
+    throw std::invalid_argument(
+        "Layerwise direct-return communication totals are inconsistent");
   }
 }
 
@@ -398,6 +437,10 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
     out << ",\n      \"correctness_passed\": "
         << (result.correctness_passed ? "true" : "false")
         << ",\n      \"pir_call_count\": " << communication.pir_call_count
+        << ",\n      \"direct_return_levels\": "
+        << result.direct_return_levels
+        << ",\n      \"direct_return_response_bytes\": "
+        << result.direct_return_response_bytes
         << ",\n      \"raw_dataset_bytes\": " << result.raw_dataset_bytes
         << ",\n      \"paper_plaintext_database_bytes\": "
         << result.paper_plaintext_database_bytes
@@ -488,8 +531,11 @@ struct PirCallOutput {
 
 struct PathTrialOutput {
   TrialTiming timing;
-  std::vector<size_t> response_bytes;
+  std::vector<size_t> response_bytes;  // one entry per PIR call
   MerklePath path;
+  // Layerwise direct-return levels: served in the clear, no PIR call.
+  size_t direct_levels = 0;
+  uint64_t plain_response_bytes = 0;
 };
 
 size_t flat_target_num_pt(const MerkleWorkload &workload) {
@@ -861,7 +907,20 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   servers.reserve(layouts.size());
   // Each level gets its own minimal shape, but every server points to the same
   // immutable scheme-level helper-key allocation.
+  // Levels that fit one plaintext are not served by PIR at all: the server
+  // keeps the level's node array and hands the whole level over in the clear.
+  std::vector<std::vector<uint8_t>> direct_level_bytes(layouts.size());
   for (const LayerLayout &layout : layouts) {
+    if (layout.direct_return) {
+      std::vector<uint8_t> &bytes = direct_level_bytes.at(layout.level - 1);
+      bytes.reserve(layout.node_count * sizeof(MerkleNode));
+      for (size_t local = 0; local < layout.node_count; ++local) {
+        const MerkleNode node = synthetic_merkle_node(layout.level, local);
+        bytes.insert(bytes.end(), node.begin(), node.end());
+      }
+      servers.push_back(nullptr);
+      continue;
+    }
     auto server = std::make_unique<PirServer>(layout.params);
     server->set_client_session_keys(client.get_client_id(), keys);
     if (server->client_session_keys(client.get_client_id()).get() != keys.get()) {
@@ -886,18 +945,40 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
       const LayerLayout &layout = layouts.at(level - 1);
       const size_t local =
           merkle_sibling_local(leaf, workload.tree_height, level);
-      const size_t plaintext_index = local / 96;
-      const size_t node_offset = local % 96;
-      PirCallOutput output = timed_pir_call(
-          client, layout.params, *servers.at(level - 1),
-          client.get_client_id(), plaintext_index, node_offset);
-      add_online_timing(trial.timing, output.timing);
-      trial.response_bytes.push_back(output.response_bytes);
       const MerkleNode expected = synthetic_merkle_node(level, local);
-      if (!output.node.has_value() || *output.node != expected) {
-        throw std::runtime_error("Layerwise Merkle PIR node mismatch");
+      if (layout.direct_return) {
+        // Direct return: no query; the server's "answer" is a copy of the
+        // whole level, the client picks its node out of it. Both sides are
+        // timed with the same boundaries as a PIR call.
+        const std::vector<uint8_t> &level_bytes =
+            direct_level_bytes.at(level - 1);
+        auto start = BenchmarkClock::now();
+        const std::vector<uint8_t> wire(level_bytes);
+        trial.timing.server_compute += elapsed_since(start);
+        start = BenchmarkClock::now();
+        MerkleNode node;
+        std::copy_n(wire.begin() + local * sizeof(MerkleNode),
+                    sizeof(MerkleNode), node.begin());
+        trial.timing.response_load_decrypt_extract += elapsed_since(start);
+        if (node != expected) {
+          throw std::runtime_error("Layerwise direct-return node mismatch");
+        }
+        trial.direct_levels += 1;
+        trial.plain_response_bytes += wire.size();
+        trial.path.push_back(node);
+      } else {
+        const size_t plaintext_index = local / 96;
+        const size_t node_offset = local % 96;
+        PirCallOutput output = timed_pir_call(
+            client, layout.params, *servers.at(level - 1),
+            client.get_client_id(), plaintext_index, node_offset);
+        add_online_timing(trial.timing, output.timing);
+        trial.response_bytes.push_back(output.response_bytes);
+        if (!output.node.has_value() || *output.node != expected) {
+          throw std::runtime_error("Layerwise Merkle PIR node mismatch");
+        }
+        trial.path.push_back(*output.node);
       }
-      trial.path.push_back(*output.node);
       if (level == 1) break;
     }
     return trial;
@@ -930,9 +1011,41 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   result.name = "merkle_layerwise";
   result.correctness_passed = true;
   result.raw_dataset_bytes = raw_merkle_bytes(workload);
+  size_t direct_levels = 0;
+  uint64_t direct_plain_bytes = 0;
+  for (const LayerLayout &layout : layouts) {
+    if (!layout.direct_return) continue;
+    direct_levels += 1;
+    direct_plain_bytes = checked_add(
+        direct_plain_bytes,
+        checked_multiply(layout.node_count, workload.node_bytes,
+                         "direct-return level bytes"),
+        "direct-return level total");
+  }
+  result.direct_return_levels = direct_levels;
+  result.direct_return_response_bytes = direct_plain_bytes;
   // The stored plaintext database is the sum of all disjoint level databases.
   // Each is scanned once per path, so database and scan bytes coincide here.
+  // Direct-return levels are stored and sent as raw node arrays, so they
+  // count their raw bytes in every column.
   for (const LayerLayout &layout : layouts) {
+    if (layout.direct_return) {
+      const uint64_t raw = checked_multiply(
+          layout.node_count, workload.node_bytes, "direct level raw bytes");
+      result.paper_plaintext_database_bytes = checked_add(
+          result.paper_plaintext_database_bytes, raw,
+          "layer paper plaintext database total");
+      result.logical_padded_database_bytes = checked_add(
+          result.logical_padded_database_bytes, raw,
+          "layer padded database total");
+      result.physical_preprocessed_storage_bytes = checked_add(
+          result.physical_preprocessed_storage_bytes, raw,
+          "layer physical database total");
+      result.raw_application_scan_bytes = checked_add(
+          result.raw_application_scan_bytes, raw,
+          "layer raw application total");
+      continue;
+    }
     result.paper_plaintext_database_bytes = checked_add(
         result.paper_plaintext_database_bytes,
         checked_multiply(layout.target_num_pt, layout.params.get_pt_size(),
@@ -966,7 +1079,8 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   result.timing.setup = setup_time;
   result.server_phase_ms = phases.averages();
   result.communication = communication_stats(
-      reference, workload.tree_height, response_shape);
+      reference, workload.tree_height - direct_levels, response_shape,
+      direct_plain_bytes);
   finalize_case_statistics(result);
   return execution;
 }
@@ -1058,8 +1172,10 @@ std::vector<BenchmarkCaseResult> execute_case_set(
       run_merkle_flat_case(workload, reference, trials);
   BenchmarkCaseExecution layerwise =
       run_merkle_layerwise_case(workload, reference, trials);
-  validate_matching_path_communication(flat.result.communication,
-                                       layerwise.result.communication);
+  validate_layerwise_path_communication(
+      flat.result.communication, layerwise.result.communication,
+      layerwise.result.direct_return_levels,
+      layerwise.result.direct_return_response_bytes);
   if (flat.measured_paths != layerwise.measured_paths) {
     throw std::runtime_error(
         "Flat and layerwise measured Merkle paths differ");
