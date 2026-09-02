@@ -23,7 +23,8 @@
 #
 # 旋钮(环境变量):
 #   EXPERIMENTS=64  每种的测量次数        WARMUPS=3
-#   SCALES="1gb 4gb"  只想跑一档可设 SCALES=1gb
+#   SCALES="1gb 4gb"  只想跑一档可设 SCALES=1gb; 另有 256mb 档(2^22 叶, L=22,
+#                     笔记本可跑的规模): SCALES=256mb EXPERIMENTS=16
 #   TRIAL_SEED=5723628103747520850(与已提交结果同种子)
 #   JOBS=<nproc>    NOAVX512=OFF    SKIP_BUILD=0(=1 时不重建, 仅单档可用)
 #
@@ -66,9 +67,10 @@ HEXL_VERSION="1.2.6"
 
 scale_leaf_pow() {  # 档位 -> log2(叶数): 与套件的 paper_row 标签一致
   case "$1" in
+    256mb) echo 22 ;;
     1gb) echo 24 ;;
     4gb) echo 26 ;;
-    *) echo "未知档位 $1(可选 1gb 4gb)" >&2; exit 2 ;;
+    *) echo "未知档位 $1(可选 256mb 1gb 4gb)" >&2; exit 2 ;;
   esac
 }
 
@@ -265,6 +267,15 @@ for MODE in "${MODES[@]}"; do
   esac
 done
 
+# merkle 主档叶数取 SCALES 的首个档位; 套件把主档上限设在 2^24, 4gb 只能经
+# --run-optional-4gb 追加, 所以 SCALES 必须以 256mb 或 1gb 开头。
+read -ra SCALE_LIST <<< "${SCALES}"
+PRIMARY_POW="$(scale_leaf_pow "${SCALE_LIST[0]}")"
+if [[ "${PRIMARY_POW}" -gt 24 ]]; then
+  echo "merkle 主档上限 2^24: SCALES 需以 256mb 或 1gb 开头(4gb 经 flag 追加)" >&2
+  exit 2
+fi
+
 # ---------------- 执行: 逐档补丁->重建->跑 ----------------
 FIRST_SCALE=1
 for SCALE in ${SCALES}; do
@@ -280,12 +291,12 @@ for SCALE in ${SCALES}; do
   if [[ "${FIRST_SCALE}" == "1" ]]; then
     run_bin cpu_info.txt --test cpu_info
 
-    # merkle 套件一次调用覆盖两档: 主档 2^24(1GB, --experiments 次), SCALES 含
-    # 4gb 时加 --run-optional-4gb 让同一进程再测 2^26 档(套件内固定 4 次测量,
-    # 内存不够则套件自记 skip)
+    # merkle 套件一次调用覆盖两档: 主档 = SCALES 首个档位(256mb/1gb,
+    # --experiments 次), SCALES 含 4gb 时加 --run-optional-4gb 让同一进程再测
+    # 2^26 档(套件内固定 4 次测量, 内存不够则套件自记 skip)
     if has_mode merkle; then
       MERKLE_ARGS=(--test merkle_benchmarks
-        --leaf-count $((1 << 24)) --warmup "${WARMUPS}"
+        --leaf-count $((1 << PRIMARY_POW)) --warmup "${WARMUPS}"
         --experiments "${EXPERIMENTS}" --trial-seed "${TRIAL_SEED}"
         --benchmark-case "${BENCHMARK_CASE}"
         --benchmark-json "${OUT_DIR}/merkle.json")
