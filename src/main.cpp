@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -77,7 +78,7 @@ int main(int argc, char *argv[]) {
     bool layout_sweep_all = false;
     double layer_padding_budget = 1.01;
     std::string layer_layout_policy = "legacy";
-    std::string layer_layout_profile;
+    std::vector<std::string> layer_layout_profiles;  // repeatable
     bool allow_layout_profile_fallback = false;
 
     for (int i = 1; i < argc; ++i) {
@@ -128,7 +129,7 @@ int main(int argc, char *argv[]) {
               "--layer-layout-policy must be legacy or profiled");
         }
       } else if (std::strcmp(argv[i], "--layer-layout-profile") == 0) {
-        layer_layout_profile = require_value(argc, argv, i);
+        layer_layout_profiles.push_back(require_value(argc, argv, i));
       } else if (std::strcmp(argv[i], "--allow-layout-profile-fallback") == 0) {
         allow_layout_profile_fallback = true;
       } else if (std::strcmp(argv[i], "--no-compress") == 0) {
@@ -171,14 +172,18 @@ int main(int argc, char *argv[]) {
       options.layer_planner.allow_profile_fallback =
           allow_layout_profile_fallback;
       if (layer_layout_policy == "profiled") {
-        if (layer_layout_profile.empty()) {
+        if (layer_layout_profiles.empty()) {
           throw std::invalid_argument(
               "--layer-layout-policy profiled requires "
-              "--layer-layout-profile <path>");
+              "--layer-layout-profile <path> (repeatable, one per tree height)");
         }
         options.layer_planner.policy = LayerLayoutPolicy::profiled;
-        options.layer_planner.profile = std::make_shared<LayerLayoutProfile>(
-            load_layer_layout_profile(layer_layout_profile));
+        for (const std::string &path : layer_layout_profiles) {
+          options.layer_profiles.push_back(
+              std::make_shared<LayerLayoutProfile>(
+                  load_layer_layout_profile(path)));
+        }
+        options.layer_planner.profile = options.layer_profiles.front();
       }
       BenchmarkReport report = run_merkle_benchmark_suite(options);
       print_benchmark_report(report);

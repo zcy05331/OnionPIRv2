@@ -1407,6 +1407,21 @@ BenchmarkEnvironment detect_benchmark_environment() {
   return environment;
 }
 
+// Per-workload planner config: the profile whose tree height matches, else the
+// primary one (validation then reports the mismatch or falls back).
+LayerPlannerConfig planner_for_workload(const MerkleBenchmarkOptions &options,
+                                        const MerkleWorkload &workload) {
+  LayerPlannerConfig config = options.layer_planner;
+  if (config.policy != LayerLayoutPolicy::profiled) return config;
+  for (const auto &profile : options.layer_profiles) {
+    if (profile && profile->tree_height == workload.tree_height) {
+      config.profile = profile;
+      return config;
+    }
+  }
+  return config;
+}
+
 BenchmarkReport run_merkle_benchmark_suite(
     const MerkleBenchmarkOptions &options) {
   if (options.leaf_count > (size_t{1} << 24)) {
@@ -1459,7 +1474,7 @@ BenchmarkReport run_merkle_benchmark_suite(
 
   append_case_set(report.cases,
                   execute_case_set(workload, reference, trials,
-                                   options.case_selection, "", options.layer_planner));
+                                   options.case_selection, "", planner_for_workload(options, workload)));
 
   OptionalWorkloadResult optional;
   optional.leaf_count = size_t{1} << 26;
@@ -1500,7 +1515,7 @@ BenchmarkReport run_merkle_benchmark_suite(
           report.cases,
           execute_case_set(optional_workload, optional_reference,
                            optional_trials, options.case_selection,
-                           "_optional_4gb", options.layer_planner));
+                           "_optional_4gb", planner_for_workload(options, optional_workload)));
     }
   }
   report.workload.optional_workloads.push_back(std::move(optional));

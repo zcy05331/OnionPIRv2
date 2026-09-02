@@ -203,7 +203,11 @@ struct MerkleBenchmarkOptions {
   bool run_optional_4gb = false;
   BenchmarkCaseSelection case_selection = BenchmarkCaseSelection::all;
   // Layerwise layout planner policy (legacy padding-first by default).
+  // layer_planner.profile is the primary-tier profile; layer_profiles may
+  // hold several (one per tree height) and the suite picks, per workload,
+  // the one whose tree_height matches (the 4 GB tier has H = 26).
   LayerPlannerConfig layer_planner;
+  std::vector<std::shared_ptr<const LayerLayoutProfile>> layer_profiles;
 };
 
 // Offline per-level candidate sweep: one PirServer per (level, candidate),
