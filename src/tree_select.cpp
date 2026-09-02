@@ -631,6 +631,7 @@ RlweCt select_level_m32(const TreeLevelDatabaseM32 &db, const LevelPlan &plan,
   // 每个 CRT limb 跑一次 level_mat_mat_32：对全部 N 个 NTT 系数一次性完成
   // rows×cols 与 cols×2 的 32×32→64 矩阵乘（内部延迟规约到 mod q1 / q2）。
   // 输出布局与金字塔 B 布局同构：out[(coeff·rows + row)·2 + comp]。
+  TIME_START(TREE_SCAN_TIME);
   const size_t out_elems = N * db.rows * 2;
   std::vector<uint64_t> out_lo(out_elems), out_hi(out_elems);
   level_mat_mat_32(db.lo.data(), pyramid_m32.lo[pyramid_row].data(),
@@ -672,14 +673,18 @@ RlweCt select_level_m32(const TreeLevelDatabaseM32 &db, const LevelPlan &plan,
     utils::ntt_inv(ct.c1.data(), N, q);
     candidates.push_back(std::move(ct));
   }
+  TIME_END(TREE_SCAN_TIME);
 
   // Single / CoarsenedAlpha 情形只有单行输出，直接就是 C_ℓ；
   // AlphaBeta 情形还需把 2^d 个候选做 MSB-first β 折叠。
   if (plan.select_case != SelectCase::AlphaBeta) {
     return std::move(candidates.front());
   }
-  return fold_beta_dimension(std::move(candidates), plan, beta_selectors,
-                             mux);
+  TIME_START(TREE_FOLD_TIME);
+  RlweCt folded = fold_beta_dimension(std::move(candidates), plan,
+                                      beta_selectors, mux);
+  TIME_END(TREE_FOLD_TIME);
+  return folded;
 }
 
 // NTT-u64 优化版 SelectLevel（Milestone-6，§6.3）：与 select_level 逐分支
@@ -699,12 +704,15 @@ RlweCt select_level_ntt(const TreeLevelDatabaseNtt &db, const LevelPlan &plan,
           "alpha pyramid does not match the tree parameters");
 
   NttAccumulator acc;
+  TIME_START(TREE_SCAN_TIME);
   switch (plan.select_case) {
     case SelectCase::Single: {
       // R = 1：唯一明文乘塔顶 A^(a)_0（恒加密 1），一次点乘即完成选择。
       acc.reset(K * N);
       acc.add_product(db.plaintexts[0], pyramid_ntt[tree.a][0], scheme);
-      return acc.finish(scheme);
+      RlweCt out = acc.finish(scheme);
+      TIME_END(TREE_SCAN_TIME);
+      return out;
     }
     case SelectCase::CoarsenedAlpha: {
       // 1 < R < N0：粗化行 c 恰是 R 维 one-hot，Σ_k D[k]·A^(c)_k 选出
@@ -716,7 +724,9 @@ RlweCt select_level_ntt(const TreeLevelDatabaseNtt &db, const LevelPlan &plan,
       for (size_t k = 0; k < db.R; ++k) {
         acc.add_product(db.plaintexts[k], pyramid_ntt[c][k], scheme);
       }
-      return acc.finish(scheme);
+      RlweCt out = acc.finish(scheme);
+      TIME_END(TREE_SCAN_TIME);
+      return out;
     }
     case SelectCase::AlphaBeta: {
       // R = N0·2^d：对每个 δ 用底行 A^(0) 做首维内积（同
@@ -733,10 +743,15 @@ RlweCt select_level_ntt(const TreeLevelDatabaseNtt &db, const LevelPlan &plan,
         }
         candidates.push_back(acc.finish(scheme));
       }
-      return fold_beta_dimension(std::move(candidates), plan, beta_selectors,
-                                 mux);
+      TIME_END(TREE_SCAN_TIME);
+      TIME_START(TREE_FOLD_TIME);
+      RlweCt folded = fold_beta_dimension(std::move(candidates), plan,
+                                          beta_selectors, mux);
+      TIME_END(TREE_FOLD_TIME);
+      return folded;
     }
   }
+  TIME_END(TREE_SCAN_TIME);
   // 枚举值损坏时的兜底。
   throw std::invalid_argument("tree_select: unknown level plan case");
 }

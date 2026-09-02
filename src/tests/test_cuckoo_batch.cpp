@@ -3,6 +3,7 @@
 #include "merkle_baseline.h"
 #include "merkle_benchmark.h"
 
+#include <array>
 #include <bit>
 #include <chrono>
 #include <memory>
@@ -194,6 +195,14 @@ void PirTest::test_cuckoo_benchmark() {
 
   std::vector<double> client_ms, server_ms, decode_ms;
   size_t response_bytes_total = 0;
+  // Server phase breakdown from the TimerLogger sections make_query brackets,
+  // summed over every bucket query of one trial (one experiment per trial).
+  constexpr std::array<const char *, 5> kPhaseKeys = {
+      EXPAND_TIME, CONVERT_TIME, FST_DIM_TIME, OTHER_DIM_TIME, MOD_SWITCH};
+  constexpr std::array<const char *, 5> kPhaseLabels = {
+      "expand", "convert", "first_dim", "other_dim", "mod_switch"};
+  std::array<double, 5> phase_sum{};
+  CLEAN_TIMER();
   const auto run_trial = [&](size_t leaf, bool measured) {
     const std::vector<uint32_t> ordinals =
         sibling_ordinals(leaf, tree_height);
@@ -230,6 +239,12 @@ void PirTest::test_cuckoo_benchmark() {
         ++recovered;
       }
     }
+    END_EXPERIMENT();
+    if (measured) {
+      for (size_t i = 0; i < kPhaseKeys.size(); ++i) {
+        phase_sum[i] += GET_LAST_TIME(kPhaseKeys[i]);
+      }
+    }
     require_test(recovered == tree_height,
                  "every sibling recovered in the batch");
     if (measured) {
@@ -261,6 +276,19 @@ void PirTest::test_cuckoo_benchmark() {
   BENCH_PRINT("server batch avg " << avg(server_ms)
               << " ms; samples:");
   for (double v : server_ms) BENCH_PRINT("  batch " << v << " ms");
+  {
+    std::string breakdown = "server phase breakdown avg (ms, sum over buckets):";
+    double phase_total = 0;
+    for (size_t i = 0; i < kPhaseKeys.size(); ++i) {
+      const double v = phase_sum[i] / server_ms.size();
+      phase_total += v;
+      breakdown += std::string(" ") + kPhaseLabels[i] + " " +
+                   std::to_string(v);
+    }
+    BENCH_PRINT(breakdown);
+    BENCH_PRINT("  phases sum " << phase_total << " ms of server batch avg "
+                << avg(server_ms) << " ms");
+  }
   BENCH_PRINT("client decode avg " << avg(decode_ms) << " ms");
   BENCH_PRINT("communication: queries " << query_bytes << " B (modeled, "
               << params.num_buckets << " ciphertexts), responses "

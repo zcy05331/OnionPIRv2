@@ -1,5 +1,6 @@
 #pragma once
 
+#include "logging.h"
 #include "server.h"
 #include "tree_index.h"
 #include "tree_query.h"
@@ -10,6 +11,18 @@
 #include <functional>
 #include <span>
 #include <vector>
+
+// 服务端路径的阶段计时键（TimerLogger 区段名）。select 内核与 answer_path_*
+// 用 TIME_START/TIME_END 按键累计，一个 trial 内跨层、跨 chunk 求和；基准在每个
+// trial 结束时 END_EXPERIMENT() 后用 GET_LAST_TIME(键) 读出该 trial 的分段耗时。
+// 七段合起来就是 answer_path_* 的服务端时间（差值为分配/拷贝等胶水开销）：
+#define TREE_PYRAMID_TIME "Tree alpha pyramid"      // 每查询一次的 α 金字塔 + NTT/m32 抬升
+#define TREE_SCAN_TIME "Tree first-dim scan"        // 首维 matmul/逐点乘 + CRT + INTT（数据库扫描）
+#define TREE_FOLD_TIME "Tree beta fold"             // β 维 MSB-first CMux 折叠
+#define TREE_ROTATE_TIME "Tree private rotate"      // γ 位驱动的 RotSelect 链
+#define TREE_PROJECT_TIME "Tree project"            // 迹式投影（Galois 密钥切换链）
+#define TREE_PACK_TIME "Tree pack shift+add"        // X^z 移位 + 累加进响应密文（响应合并）
+#define TREE_SWITCH_TIME "Tree response switch"     // small-q 模数切换或 d=2 环切换压缩
 
 // 本文件是 Binary Tree PIR 的"数据库打包 + 首维选择(SelectLevel) + β 折叠"层
 // （蓝图 §6、§10、§11，Milestone-2）。此处声明的基础实现全部是标量/参考路径：

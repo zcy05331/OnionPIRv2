@@ -1,10 +1,12 @@
 #include "merkle_benchmark.h"
 
 #include "client.h"
+#include "logging.h"
 #include "server.h"
 #include "utils.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -418,6 +420,13 @@ std::string benchmark_report_json(const BenchmarkReport &report) {
     write_double_array(out, result.server_compute_samples_ms);
     out << ",\n      \"server_compute_ms_statistics\": ";
     write_metric_statistics(out, result.server_compute_ms_statistics);
+    out << ",\n      \"server_phase_ms\": {";
+    bool first_phase = true;
+    for (const auto &[phase, ms] : result.server_phase_ms) {
+      out << (first_phase ? "" : ", ") << '"' << phase << "\": " << ms;
+      first_phase = false;
+    }
+    out << '}';
     out << ",\n      \"response_serialize_ms\": "
         << milliseconds(result.timing.response_serialize)
         << ",\n      \"response_load_decrypt_extract_ms\": "
@@ -629,6 +638,44 @@ void require_response_shape(const std::vector<size_t> &expected,
 
 }  // namespace
 
+// Reads the server phase breakdown out of the process-wide TimerLogger.
+// make_query brackets expand / convert / first_dim / other_dim / mod_switch;
+// the logger sums repeated sections until END_EXPERIMENT(), so one experiment
+// per trial gives per-trial phase totals even when a trial issues H PIR calls.
+// Warm-up trials must be flushed too, or they would leak into the first
+// measured experiment.
+struct ServerPhaseAccumulator {
+  static constexpr std::array<std::pair<const char *, const char *>, 5>
+      kPhases{{{"expand", EXPAND_TIME},
+               {"convert", CONVERT_TIME},
+               {"first_dim", FST_DIM_TIME},
+               {"other_dim", OTHER_DIM_TIME},
+               {"mod_switch", MOD_SWITCH}}};
+
+  std::map<std::string, double> sums;
+  size_t measured = 0;
+
+  ServerPhaseAccumulator() { CLEAN_TIMER(); }
+
+  void end_trial(bool is_measured) {
+    END_EXPERIMENT();
+    if (!is_measured) return;
+    for (const auto &[name, key] : kPhases) sums[name] += GET_LAST_TIME(key);
+    ++measured;
+  }
+
+  std::map<std::string, double> averages() const {
+    std::map<std::string, double> out;
+    for (const auto &[name, key] : kPhases) {
+      const auto it = sums.find(name);
+      out[name] = (measured == 0 || it == sums.end())
+                      ? 0.0
+                      : it->second / static_cast<double>(measured);
+    }
+    return out;
+  }
+};
+
 BenchmarkCaseExecution run_standard_case(
     const MerkleWorkload &workload, const PirParams &reference,
     const BenchmarkTrialPlan &trials) {
@@ -658,8 +705,10 @@ BenchmarkCaseExecution run_standard_case(
     return output;
   };
 
+  ServerPhaseAccumulator phases;
   for (size_t leaf : trials.warmup_leaf_indices) {
     (void)run_trial(leaf);
+    phases.end_trial(false);
   }
 
   TrialTiming timing_total;
@@ -668,6 +717,7 @@ BenchmarkCaseExecution run_standard_case(
   server_compute_samples_ms.reserve(trials.measured_leaf_indices.size());
   for (size_t leaf : trials.measured_leaf_indices) {
     PirCallOutput output = run_trial(leaf);
+    phases.end_trial(true);
     add_online_timing(timing_total, output.timing);
     server_compute_samples_ms.push_back(
         milliseconds(output.timing.server_compute));
@@ -697,6 +747,7 @@ BenchmarkCaseExecution run_standard_case(
   result.communication = communication_stats(reference, 1, response_shape);
   result.server_compute_samples_ms =
       std::move(server_compute_samples_ms);
+  result.server_phase_ms = phases.averages();
   finalize_case_statistics(result);
   return execution;
 }
@@ -744,8 +795,10 @@ BenchmarkCaseExecution run_merkle_flat_case(
     return trial;
   };
 
+  ServerPhaseAccumulator phases;
   for (size_t leaf : trials.warmup_leaf_indices) {
     (void)run_trial(leaf);
+    phases.end_trial(false);
   }
 
   TrialTiming timing_total;
@@ -753,6 +806,7 @@ BenchmarkCaseExecution run_merkle_flat_case(
   BenchmarkCaseExecution execution;
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
+    phases.end_trial(true);
     add_online_timing(timing_total, trial.timing);
     execution.result.server_compute_samples_ms.push_back(
         milliseconds(trial.timing.server_compute));
@@ -786,6 +840,7 @@ BenchmarkCaseExecution run_merkle_flat_case(
   result.timing = average_online_timing(
       timing_total, trials.measured_leaf_indices.size());
   result.timing.setup = setup_time;
+  result.server_phase_ms = phases.averages();
   result.communication = communication_stats(
       reference, workload.tree_height, response_shape);
   finalize_case_statistics(result);
@@ -848,8 +903,10 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
     return trial;
   };
 
+  ServerPhaseAccumulator phases;
   for (size_t leaf : trials.warmup_leaf_indices) {
     (void)run_trial(leaf);
+    phases.end_trial(false);
   }
 
   TrialTiming timing_total;
@@ -857,6 +914,7 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   BenchmarkCaseExecution execution;
   for (size_t leaf : trials.measured_leaf_indices) {
     PathTrialOutput trial = run_trial(leaf);
+    phases.end_trial(true);
     add_online_timing(timing_total, trial.timing);
     execution.result.server_compute_samples_ms.push_back(
         milliseconds(trial.timing.server_compute));
@@ -906,6 +964,7 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   result.timing = average_online_timing(
       timing_total, trials.measured_leaf_indices.size());
   result.timing.setup = setup_time;
+  result.server_phase_ms = phases.averages();
   result.communication = communication_stats(
       reference, workload.tree_height, response_shape);
   finalize_case_statistics(result);
@@ -1256,6 +1315,17 @@ void print_benchmark_report(const BenchmarkReport &report) {
               << result.communication.online_total_bytes_mixed << ','
               << result.communication.first_session_total_bytes_mixed
               << '\n';
+  }
+  std::cout << "case,expand_ms,convert_ms,first_dim_ms,other_dim_ms,"
+               "mod_switch_ms\n";
+  for (const BenchmarkCaseResult &result : report.cases) {
+    const auto phase = [&](const char *name) {
+      const auto it = result.server_phase_ms.find(name);
+      return it == result.server_phase_ms.end() ? 0.0 : it->second;
+    };
+    std::cout << result.name << ',' << phase("expand") << ','
+              << phase("convert") << ',' << phase("first_dim") << ','
+              << phase("other_dim") << ',' << phase("mod_switch") << '\n';
   }
   for (const OptionalWorkloadResult &optional :
        report.workload.optional_workloads) {

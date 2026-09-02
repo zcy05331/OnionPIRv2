@@ -5,6 +5,7 @@
 #include "tree_response.h"
 #include "tree_select.h"
 
+#include <array>
 #include <bit>
 #include <chrono>
 #include <numeric>
@@ -60,6 +61,15 @@ void PirTest::test_tree_benchmark() {
   std::vector<double> query_ms, unpack_ms, path_ms, extract_ms;
   size_t actual_response_bytes = 0;
   bool response_small_q = false;
+  // Server-path stage breakdown via the TimerLogger sections that
+  // answer_path_mvp and the select kernels bracket (one experiment per trial).
+  constexpr std::array<const char *, 7> kStages = {
+      TREE_PYRAMID_TIME, TREE_SCAN_TIME,    TREE_FOLD_TIME, TREE_ROTATE_TIME,
+      TREE_PROJECT_TIME, TREE_PACK_TIME,    TREE_SWITCH_TIME};
+  constexpr std::array<const char *, 7> kStageLabels = {
+      "pyramid", "scan", "fold", "rotate", "project", "pack", "switch"};
+  std::array<double, 7> stage_sum{};
+  CLEAN_TIMER();
   const auto run_trial = [&](size_t leaf, bool measured) {
     auto start = Clock::now();
     RlweCt query = make_tree_query(client, scheme, tree, leaf);
@@ -80,6 +90,12 @@ void PirTest::test_tree_benchmark() {
     const std::vector<uint64_t> path =
         extract_path_mvp(response, client, tree);
     const double e_ms = ms_since(start);
+    END_EXPERIMENT();
+    if (measured) {
+      for (size_t i = 0; i < kStages.size(); ++i) {
+        stage_sum[i] += GET_LAST_TIME(kStages[i]);
+      }
+    }
 
     // Correctness gate outside every timer boundary consumer: hard-fail on
     // any wrong path value.
@@ -133,6 +149,19 @@ void PirTest::test_tree_benchmark() {
               << avg(path_ms) << " ms");
   BENCH_PRINT("server total avg " << server_avg << " ms; samples(path):");
   for (double v : path_ms) BENCH_PRINT("  path " << v << " ms");
+  {
+    std::string breakdown = "server path breakdown avg (ms):";
+    double stage_total = 0;
+    for (size_t i = 0; i < kStages.size(); ++i) {
+      const double v = stage_sum[i] / path_ms.size();
+      stage_total += v;
+      breakdown += std::string(" ") + kStageLabels[i] + " " +
+                   std::to_string(v);
+    }
+    BENCH_PRINT(breakdown);
+    BENCH_PRINT("  stages sum " << stage_total << " ms of path avg "
+                << avg(path_ms) << " ms (remainder = glue/alloc)");
+  }
   BENCH_PRINT("client extract avg " << avg(extract_ms) << " ms");
   BENCH_PRINT("communication: query " << query_bytes
               << " B (modeled, 1 ciphertext), response "

@@ -18,8 +18,8 @@
 #   tree-g1   tree_bench: g=1 标量 MVP(诊断性基准, 叶数与各档对齐,
 #             但每节点只有 12bit, 载荷字节数不等于 1GB/4GB, 报告里注意)。
 #   compress  tree_compress: M7 小环压缩门(固定小形状, 无 DB 档位, 只跑一次)。
-#   cuckoo    cuckoo_bench: cuckoo batch baseline。仅当检出含该测试
-#             (codex/cuckoo-batch-baseline 分支)时自动加入, 同样按档补丁。
+#   cuckoo    cuckoo_bench: cuckoo hash batch PIR baseline(3 hash, 1.5x 桶,
+#             3x 复制), 同样按档补丁 tree_height 与 kTrials。
 #
 # 旋钮(环境变量):
 #   EXPERIMENTS=64  每种的测量次数        WARMUPS=3
@@ -255,7 +255,7 @@ if [[ ${#MODES[@]} -eq 0 ]]; then
   if grep -q 'cuckoo_bench' src/tests/run_test.cpp 2>/dev/null; then
     MODES+=(cuckoo)
   else
-    echo "[info] 当前检出无 cuckoo_bench(在 codex/cuckoo-batch-baseline 分支), 跳过"
+    echo "[info] 当前检出未注册 cuckoo_bench, 跳过 cuckoo 模式"
   fi
 fi
 has_mode() { local m; for m in "${MODES[@]}"; do [[ "$m" == "$1" ]] && return 0; done; return 1; }
@@ -324,7 +324,7 @@ for SCALE in ${SCALES}; do
         run_bin "cuckoo_${SCALE}.txt" --test cuckoo_bench
       fi
     else
-      echo "[skip] cuckoo_bench 未注册; 请 git checkout codex/cuckoo-batch-baseline 后重跑" >&2
+      echo "[skip] cuckoo_bench 未注册于此检出" >&2
     fi
   fi
   FIRST_SCALE=0

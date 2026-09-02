@@ -80,6 +80,7 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
   // 粗化级 c 取决于该层 plan）。随后一次性抬到 NTT 域（Milestone 6），使每层的
   // 首维运算都跑在预先变换好的表示上（逐点乘 + 每候选一次逆变换）；复合模数
   // 配置再把 NTT 形式按内核布局拆成两个 32-bit CRT limb。
+  TIME_START(TREE_PYRAMID_TIME);
   const AlphaPyramid pyramid =
       build_alpha_pyramid(query.alpha, tree, scheme);
   const AlphaPyramid pyramid_ntt = pyramid_to_ntt(pyramid, scheme);
@@ -87,6 +88,7 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
   if (use_m32) {
     pyramid_m32 = pyramid_to_m32(pyramid_ntt, scheme);
   }
+  TIME_END(TREE_PYRAMID_TIME);
 
   // 初始化响应骨架：L+1 个路径槽位、全零放置图（下方打包时逐层填入），
   // 并按容量 rho 算出密文分组，好预留密文数组空间。
@@ -116,9 +118,12 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
     // 步骤 (2) PrivateRotateLevel：用 γ RGSW 选择子经 CMux 组合出加密的
     // X^{-γ_l} 并乘上去——把目标记录从其打包位置 u_l 平移到位置 0，
     // g 个 chunk 因跨步布局被同一次旋转同时对齐到 {j * rho}（§3.4 收益 1）。
-    return private_rotate_level(std::move(selected), db.plans[level],
-                                std::span<GSWCt>(query.gamma_selectors),
-                                server, scheme);
+    TIME_START(TREE_ROTATE_TIME);
+    RlweCt rotated = private_rotate_level(
+        std::move(selected), db.plans[level],
+        std::span<GSWCt>(query.gamma_selectors), server, scheme);
+    TIME_END(TREE_ROTATE_TIME);
+    return rotated;
   };
 
   // 顺序打包器（Algorithm 7 第 4-6 行）：逐 chunk、逐槽位处理。健全性来自
@@ -135,9 +140,12 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
       // 非零残差 u - γ_l (mod 2^l) 上，深度 l 已足够杀光（§3.3 技巧二）；
       // 投影内部的 2^{-d} 预缩放与 d 轮 T + Subs(T, η) 逐轮翻倍累积出的
       // 2^d 精确相消；噪声经历同一投影，不被 2^{-d} mod q 放大（§3.3 技巧一）。
+      RlweCt rotated = select_and_rotate(level);
+      TIME_START(TREE_PROJECT_TIME);
       RlweCt projected = project_keep_stride(
-          select_and_rotate(level), db.plans[level].projection_depth,
+          std::move(rotated), db.plans[level].projection_depth,
           galois_keys, scheme);
+      TIME_END(TREE_PROJECT_TIME);
       // 记录公开放置图：顺序打包器把层放在其 chunk 内位置 z（提取端按
       // level_offsets[level] + j * rho 读回，见 §4.2）。
       response.level_offsets[level] = z;
@@ -147,8 +155,10 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
       } else {
         // 步骤 (4)：乘公开单项式 X^z 把该层载荷移到 {z + j * rho}，
         // 然后加进累加器——由上述残差论证，加法是无碰撞的直和。
+        TIME_START(TREE_PACK_TIME);
         const RlweCt shifted = mul_x_pow(projected, z, scheme);
         tree_ct_add_inplace(packed, shifted, scheme);
+        TIME_END(TREE_PACK_TIME);
       }
     }
     // Milestone 5 收尾：本 chunk 的全部同态运算已完成，此刻才允许做同环模数
@@ -156,7 +166,9 @@ TreePathResponse answer_path_mvp(const PreprocessedTree &db,
     // 必须最后做：提前切换会损失噪声余量，且与首维 matmul / 外积 / Galois
     // 密钥的参数约定冲突（§4.1，与生产 make_query 同一纪律）。返回值指示
     // 配置是否定义了更窄的 small q（未定义则密文原样保留在全 q）。
+    TIME_START(TREE_SWITCH_TIME);
     response.small_q = server.switch_response_to_small_q(packed);
+    TIME_END(TREE_SWITCH_TIME);
     response.chunks.push_back(std::move(packed));
   }
   return response;
@@ -200,6 +212,7 @@ CompressedPathResponse answer_path_compressed(
 
   // 每查询一次的 α 金字塔构建 + NTT 抬升（+ 复合模数配置的 CRT limb 拆分），
   // 与 answer_path_mvp 完全一致，见彼处注释。
+  TIME_START(TREE_PYRAMID_TIME);
   const AlphaPyramid pyramid =
       build_alpha_pyramid(query.alpha, tree, scheme);
   const AlphaPyramid pyramid_ntt = pyramid_to_ntt(pyramid, scheme);
@@ -207,6 +220,7 @@ CompressedPathResponse answer_path_compressed(
   if (use_m32) {
     pyramid_m32 = pyramid_to_m32(pyramid_ntt, scheme);
   }
+  TIME_END(TREE_PYRAMID_TIME);
 
   // 与 answer_path_mvp 相同的逐层流水线，差异仅两点：偏移取 2*level（偶对齐），
   // 且始终单 chunk、全程保持全 q（为随后的环切换保留噪声余量）。
@@ -226,14 +240,18 @@ CompressedPathResponse answer_path_compressed(
                       scheme);
     // 步骤 (2) PrivateRotateLevel：乘加密的 X^{-γ_l}，
     // 一次旋转对齐目标记录的全部 g 个 chunk 到跨步格 {j * rho}。
+    TIME_START(TREE_ROTATE_TIME);
     RlweCt rotated = private_rotate_level(
         std::move(selected), db.plans[level],
         std::span<GSWCt>(query.gamma_selectors), server, scheme);
+    TIME_END(TREE_ROTATE_TIME);
     // 步骤 (3) ProjectRecord：深度 min(r, level) 的迹式投影，
     // 清零跨步格以外的一切系数。
+    TIME_START(TREE_PROJECT_TIME);
     RlweCt projected = project_keep_stride(
         std::move(rotated), db.plans[level].projection_depth, galois_keys,
         scheme);
+    TIME_END(TREE_PROJECT_TIME);
     // 步骤 (4) 偶对齐放置：记录公开偏移 2*level 并乘 X^{2*level} 移位后累加。
     // 载荷因此全部落在偶系数 {2*level + j * rho} 上；2L < rho 保证各层残差
     // 互异、加法无碰撞（level 0 即偏移 0，直接充当累加器初值）。
@@ -241,15 +259,21 @@ CompressedPathResponse answer_path_compressed(
     if (level == 0) {
       packed = std::move(projected);
     } else {
+      TIME_START(TREE_PACK_TIME);
       const RlweCt shifted = mul_x_pow(projected, 2 * level, scheme);
       tree_ct_add_inplace(packed, shifted, scheme);
+      TIME_END(TREE_PACK_TIME);
     }
   }
 
   // 收尾交给 M7 压缩：packed 仍在全 q。compress_path_response 先做偶部提取 +
   // 双 KSK gadget 密钥切换（大密钥的偶/奇小环分量 s_e、s_o 切到独立三值 s2），
   // 再居中降模到 small q；big_offsets（全为偶数）除以 2 变成小环放置图。
-  return compress_path_response(packed, offsets, tree.L + 1, keys, scheme);
+  TIME_START(TREE_SWITCH_TIME);
+  CompressedPathResponse compressed =
+      compress_path_response(packed, offsets, tree.L + 1, keys, scheme);
+  TIME_END(TREE_SWITCH_TIME);
+  return compressed;
 }
 
 // ----------------------------------------------------------------------------

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -65,6 +66,12 @@ struct BenchmarkCaseResult {
   // Warm-up trials are intentionally excluded from both vectors.
   std::vector<double> server_compute_samples_ms;
   std::optional<MetricSampleStatistics> server_compute_ms_statistics;
+  // Server-side phase breakdown in ms per trial, averaged over measured
+  // trials, read from the TimerLogger sections that make_query brackets:
+  // expand / convert / first_dim / other_dim / mod_switch. A path case sums
+  // every PIR call of one trial, so the phases add up to server_compute_ms
+  // minus glue.
+  std::map<std::string, double> server_phase_ms;
   // Paper definition: plaintext database bytes / full-case server time. For a
   // Merkle case, full-case time retrieves the complete H-node path.
   double paper_server_throughput_MBps = 0.0;
