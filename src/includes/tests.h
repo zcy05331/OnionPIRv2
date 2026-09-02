@@ -87,6 +87,8 @@ class PirTest {
     void test_merkle_integration();
     // Stage-profiled make_query is bit-for-bit the plain pipeline.
     void test_pir_profile();
+    // Layer layout candidates, features, Pareto frontier, profile selection.
+    void test_layer_layout_planner();
     void test_bv_keyswitch();
     void test_hexl_ntt();
     void test_utils_arith();
