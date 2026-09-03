@@ -3,9 +3,11 @@
 #include "merkle_baseline.h"
 #include "merkle_benchmark.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -64,6 +66,37 @@ PlaintextSource bucket_source(const CuckooBucket &bucket,
   };
 }
 
+template <typename Fn>
+bool throws_invalid_argument(Fn &&fn) {
+  try {
+    fn();
+  } catch (const std::invalid_argument &) {
+    return true;
+  }
+  return false;
+}
+
+// Every ordinal placed exactly once, in one of its candidate buckets.
+void require_valid_placement(
+    const std::vector<std::optional<uint32_t>> &assignment,
+    const std::vector<uint32_t> &ordinals, const CuckooBatchParams &params) {
+  require_test(assignment.size() == params.num_buckets, "assignment size");
+  std::vector<uint32_t> placed;
+  for (size_t b = 0; b < assignment.size(); ++b) {
+    if (!assignment[b].has_value()) continue;
+    placed.push_back(*assignment[b]);
+    bool candidate = false;
+    for (size_t j = 0; j < params.num_hashes; ++j) {
+      candidate |= cuckoo_bucket_of(*assignment[b], j, params) == b;
+    }
+    require_test(candidate, "assignment respects the candidate buckets");
+  }
+  std::vector<uint32_t> expected = ordinals;
+  std::sort(placed.begin(), placed.end());
+  std::sort(expected.begin(), expected.end());
+  require_test(placed == expected, "every batch item is placed exactly once");
+}
+
 }  // namespace
 
 // Correctness gate at H = 13: bucket membership, deterministic cuckoo
@@ -113,19 +146,7 @@ void PirTest::test_cuckoo_batch() {
         sibling_ordinals(leaf, tree_height);
     const auto assignment = cuckoo_place(ordinals, params);
 
-    // Every ordinal is assigned exactly once, to one of its candidates.
-    size_t assigned = 0;
-    for (size_t b = 0; b < assignment.size(); ++b) {
-      if (!assignment[b].has_value()) continue;
-      ++assigned;
-      bool candidate = false;
-      for (size_t j = 0; j < params.num_hashes; ++j) {
-        candidate |= cuckoo_bucket_of(*assignment[b], j, params) == b;
-      }
-      require_test(candidate, "assignment respects the candidate buckets");
-    }
-    require_test(assigned == ordinals.size(),
-                 "every batch item is placed exactly once");
+    require_valid_placement(assignment, ordinals, params);
 
     // One PIR round per bucket; unassigned buckets ask a dummy index.
     for (size_t b = 0; b < buckets.size(); ++b) {
@@ -148,6 +169,113 @@ void PirTest::test_cuckoo_batch() {
                      "batched sibling must decode exactly");
       }
     }
+  }
+
+  // Parameter and placement validation.
+  require_test(throws_invalid_argument([&] {
+                 (void)make_cuckoo_batch_params(0, tree_height, 1);
+               }),
+               "accepted an empty database");
+  require_test(throws_invalid_argument([&] {
+                 (void)make_cuckoo_batch_params(item_count, 0, 1);
+               }),
+               "accepted an empty batch");
+  require_test(throws_invalid_argument([&] {
+                 (void)make_cuckoo_batch_params(
+                     size_t{std::numeric_limits<uint32_t>::max()} + 1,
+                     tree_height, 1);
+               }),
+               "accepted ordinals beyond uint32");
+  require_test(make_cuckoo_batch_params(item_count, 1, 1).num_buckets == 2,
+               "k = 1 still gets two buckets");
+  require_test(throws_invalid_argument([&] {
+                 (void)cuckoo_bucket_of(0, params.num_hashes, params);
+               }),
+               "accepted a hash index beyond num_hashes");
+  {
+    // An ordinal that hashes nowhere near bucket 0 is not positioned there.
+    uint32_t outsider = 0;
+    for (;; ++outsider) {
+      bool hits = false;
+      for (size_t j = 0; j < params.num_hashes; ++j) {
+        hits |= cuckoo_bucket_of(outsider, j, params) == 0;
+      }
+      if (!hits) break;
+    }
+    require_test(throws_invalid_argument(
+                     [&] { (void)cuckoo_position(buckets[0], outsider); }),
+                 "positioned an ordinal outside its bucket");
+  }
+  {
+    std::vector<uint32_t> duplicated = sibling_ordinals(0, tree_height);
+    duplicated[1] = duplicated[0];
+    require_test(throws_invalid_argument(
+                     [&] { (void)cuckoo_place(duplicated, params); }),
+                 "placed a batch with a repeated ordinal");
+    std::vector<uint32_t> short_batch = sibling_ordinals(0, tree_height);
+    short_batch.pop_back();
+    require_test(throws_invalid_argument(
+                     [&] { (void)cuckoo_place(short_batch, params); }),
+                 "placed a batch of the wrong size");
+  }
+
+  // Placement is not tied to k = H or to one seed: a different seed, a
+  // smaller batch and a batch larger than the tree height all place.
+  {
+    const CuckooBatchParams reseeded =
+        make_cuckoo_batch_params(item_count, tree_height, 0x6f746865ULL);
+    const std::vector<uint32_t> ordinals = sibling_ordinals(4099, tree_height);
+    require_valid_placement(cuckoo_place(ordinals, reseeded), ordinals,
+                            reseeded);
+
+    const CuckooBatchParams small_batch =
+        make_cuckoo_batch_params(item_count, 5, 0x63756b31ULL);
+    const std::vector<uint32_t> five(ordinals.begin(), ordinals.begin() + 5);
+    require_valid_placement(cuckoo_place(five, small_batch), five,
+                            small_batch);
+  }
+  {
+    // 20 distinct ordinals: the sibling sets of the first and the last leaf
+    // are disjoint (right children versus left children at every level).
+    std::vector<uint32_t> twenty = sibling_ordinals(0, tree_height);
+    const std::vector<uint32_t> tail =
+        sibling_ordinals(leaf_count - 1, tree_height);
+    twenty.insert(twenty.end(), tail.begin(), tail.begin() + 7);
+    require_test(twenty.size() == 20, "fixture batch size");
+    const CuckooBatchParams large_batch =
+        make_cuckoo_batch_params(item_count, 20, 0x63756b31ULL);
+    require_test(large_batch.num_buckets == 30, "1.5x sizing at k = 20");
+    const std::vector<CuckooBucket> large_buckets =
+        build_cuckoo_buckets(large_batch, reference);
+    const auto assignment = cuckoo_place(twenty, large_batch);
+    require_valid_placement(assignment, twenty, large_batch);
+    // Encrypted round over the 30 buckets: every placed ordinal decodes.
+    std::vector<std::unique_ptr<PirServer>> large_servers;
+    for (const CuckooBucket &bucket : large_buckets) {
+      auto server = std::make_unique<PirServer>(bucket.params);
+      server->set_client_session_keys(client.get_client_id(), keys);
+      server->load_data(bucket.target_num_pt,
+                        bucket_source(bucket, bucket.params));
+      large_servers.push_back(std::move(server));
+    }
+    size_t recovered = 0;
+    for (size_t b = 0; b < large_buckets.size(); ++b) {
+      if (!assignment[b].has_value()) continue;
+      const size_t position =
+          cuckoo_position(large_buckets[b], *assignment[b]);
+      RlweCt query = client.fast_generate_query(large_buckets[b].params,
+                                                position / 96);
+      RlweCt response =
+          large_servers[b]->make_query(client.get_client_id(), query);
+      const RlwePt pt = client.decrypt_mod_q(response);
+      const auto [level, local] = node_of_ordinal(*assignment[b]);
+      require_test(decode_merkle_node(pt, position % 96,
+                                      large_buckets[b].params) ==
+                       synthetic_merkle_node(level, local),
+                   "k = 20 batched node must decode exactly");
+      ++recovered;
+    }
+    require_test(recovered == 20, "every item of the k = 20 batch recovered");
   }
 }
 

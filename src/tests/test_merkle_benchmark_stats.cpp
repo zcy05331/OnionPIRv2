@@ -254,6 +254,25 @@ void PirTest::test_merkle_benchmark_stats() {
     std::filesystem::remove(path);
   }
 
+  // Zero PIR calls have no communication model (the layerwise case rejects
+  // an all-direct tree before reaching this point).
+  bool rejected_zero_calls = false;
+  try {
+    (void)communication_stats(reference, 0, {}, 64);
+  } catch (const std::invalid_argument &) {
+    rejected_zero_calls = true;
+  }
+  require_test(rejected_zero_calls, "accepted a zero PIR call count");
+
+  // The 4 GB resource gate's estimate grows with the workload and the
+  // report printer accepts every case shape the suite produces.
+  require_test(estimate_merkle_benchmark_peak_bytes(size_t{1} << 8) > 0 &&
+                   estimate_merkle_benchmark_peak_bytes(size_t{1} << 12) >
+                       estimate_merkle_benchmark_peak_bytes(size_t{1} << 8),
+               "peak memory estimate is not monotone");
+  print_benchmark_report(report);
+  print_benchmark_report(layerwise_only_report);
+
   bool rejected_ungated_large_primary = false;
   try {
     MerkleBenchmarkOptions unsafe_options;
