@@ -4,8 +4,9 @@
 #include "hexl/hexl.hpp"
 #include <random>
 
-// Pedagogical BFV example using our native RLWE primitives: encrypt, add,
-// multiply a ciphertext by a plaintext in NTT form, and decrypt.
+// BFV primitives on the native RLWE layer: encrypt, add (coefficient and NTT
+// form), multiply a ciphertext by an NTT-form plaintext, decrypt. Every
+// result is checked against the Z_t[x]/(x^N+1) arithmetic it must implement.
 void PirTest::bfv_example() {
   print_func_name(__FUNCTION__);
 
@@ -16,7 +17,7 @@ void PirTest::bfv_example() {
   const double sigma = pir_params.get_noise_std_dev();
   BENCH_PRINT("N=" << N << "  q=" << q << "  t=" << t);
 
-  std::mt19937_64 rng(std::random_device{}());
+  std::mt19937_64 rng(0x626676ULL);
   RlweSk sk = gen_secret_key(N, q, rng);
 
   // ============== BFV + BFV addition (coefficient form) ==============
@@ -32,6 +33,8 @@ void PirTest::bfv_example() {
     RlwePt pt;
     int budget = decrypt_and_budget(ct_a, sk, N, q, t, pt);
     BENCH_PRINT("Noise budget before add: " << budget << " bits");
+    require_test(budget > 0, "fresh BFV ciphertext has no noise budget");
+    require_test(pt.data == a, "fresh BFV ciphertext does not decrypt to a");
   }
 
   RlweCt ct_sum = ct_a;
@@ -40,8 +43,11 @@ void PirTest::bfv_example() {
   RlwePt pt_sum;
   int sum_budget = decrypt_and_budget(ct_sum, sk, N, q, t, pt_sum);
   BENCH_PRINT("Noise budget after add: " << sum_budget << " bits");
-  BENCH_PRINT("BFV + BFV coeffs [0..1]: " << pt_sum.data[0] << ", " << pt_sum.data[1]
-              << "  (expect " << (a[0] + b[0]) % t << ", " << (a[1] + b[1]) % t << ")");
+  for (size_t i = 0; i < N; ++i) {
+    require_test(pt_sum.data[i] == (a[i] + b[i]) % t,
+                 "BFV + BFV coefficient mismatch");
+  }
+  require_test(sum_budget > 0, "BFV addition exhausted the noise budget");
   PRINT_BAR;
 
   // ============== NTT-form add ==============
@@ -56,7 +62,8 @@ void PirTest::bfv_example() {
 
   RlwePt pt_ntt_sum;
   decrypt(ct_ntt_sum, sk, N, q, t, pt_ntt_sum);
-  BENCH_PRINT("NTT-form add coeffs [0..1]: " << pt_ntt_sum.data[0] << ", " << pt_ntt_sum.data[1]);
+  require_test(pt_ntt_sum.data == pt_sum.data,
+               "NTT-form addition differs from coefficient-form addition");
   PRINT_BAR;
 
   // ============== Ciphertext × plaintext in NTT form ==============
@@ -81,10 +88,23 @@ void PirTest::bfv_example() {
 
   RlwePt pt_mul;
   int mul_budget = decrypt_and_budget(ct_mul, sk, N, q, t, pt_mul);
-  BENCH_PRINT("NTT × scalar coeffs [0..2]: " << pt_mul.data[0] << ", " << pt_mul.data[1] << ", " << pt_mul.data[2]);
-  BENCH_PRINT("  expected (a * scalar in Z_t[x]/(x^N+1)): "
-              << (a[0] * scalar[0]) % t << ", "
-              << (a[0] * scalar[1] + a[1] * scalar[0]) % t << ", "
-              << (a[1] * scalar[1]) % t);
+  // Negacyclic product a * scalar in Z_t[x]/(x^N+1); both operands live in
+  // degrees 0..1 so no wrap-around term appears.
+  std::vector<uint64_t> expected(N, 0);
+  for (size_t i = 0; i < N; ++i) {
+    if (a[i] == 0) continue;
+    for (size_t j = 0; j < N; ++j) {
+      if (scalar[j] == 0) continue;
+      const uint64_t term = (a[i] * scalar[j]) % t;
+      if (i + j < N) {
+        expected[i + j] = (expected[i + j] + term) % t;
+      } else {
+        expected[i + j - N] = (expected[i + j - N] + t - term) % t;
+      }
+    }
+  }
+  require_test(pt_mul.data == expected,
+               "ciphertext x NTT plaintext differs from the ring product");
   BENCH_PRINT("Noise budget after scalar mult: " << mul_budget << " bits");
+  require_test(mul_budget > 0, "plaintext multiplication exhausted the budget");
 }

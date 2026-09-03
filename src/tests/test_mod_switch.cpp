@@ -14,10 +14,14 @@ void PirTest::test_mod_switch() {
   const uint64_t small_q = pir_params.get_small_q();
   const uint64_t t = pir_params.get_plain_mod();
   const double sigma = pir_params.get_noise_std_dev();
-  std::mt19937_64 rng(std::random_device{}());
+  std::mt19937_64 rng(0x6d6f6473ULL);
 
+  // Dense plaintext including the extreme value t - 1, so a rounding error
+  // in the rescale shows up somewhere.
   std::vector<uint64_t> pt(coeff_count, 0);
-  for (size_t i = 0; i < 10; ++i) { pt[i] = rand() % t; }
+  for (size_t i = 0; i < coeff_count; ++i) { pt[i] = rng() % t; }
+  pt[0] = t - 1;
+  pt[coeff_count - 1] = t - 1;
 
   BENCH_PRINT("K=" << qs.size() << " new q: " << small_q);
 
@@ -43,14 +47,11 @@ void PirTest::test_mod_switch() {
     }
   }
 
-  // verify if ct coeffs are all less than small_q
-  bool can_compress = true; // if so, then we can use 32 bits to store the coeffs.
+  // The response codec writes exactly small_q_width bits per coefficient, so
+  // every switched coefficient of both components must lie below small_q.
   for (size_t i = 0; i < coeff_count; i++) {
-    if (rlwe_ct.c0[i] >= small_q) {
-      BENCH_PRINT("rlwe_ct.c0[" << i << "] = " << rlwe_ct.c0[i]);
-      BENCH_PRINT("coeff >= small_q");
-      can_compress = false;
-    }
+    require_test(rlwe_ct.c0[i] < small_q && rlwe_ct.c1[i] < small_q,
+                 "switched coefficient is not reduced below small_q");
   }
-  BENCH_PRINT("can_compress: " << can_compress);
+  BENCH_PRINT("all " << 2 * coeff_count << " switched coefficients < small_q");
 }

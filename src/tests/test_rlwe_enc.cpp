@@ -161,4 +161,5 @@ void PirTest::test_rlwe_enc() {
 
   BENCH_PRINT("\n--- Summary ---");
   BENCH_PRINT("Passed " << passed << "/" << total << " sub-tests");
+  require_test(passed == total, "RLWE encryption sub-tests failed");
 }

@@ -33,21 +33,15 @@ static void test_signed_decompose() {
       reconstructed = (reconstructed + (static_cast<uint128_t>(digits[i]) * Bi) % q) % q;
       Bi = (Bi * B) % q;
     }
-    if (static_cast<uint64_t>(reconstructed) != val) {
-      std::cout << "FAIL: reconstruction mismatch at val=" << val
-                << " got=" << static_cast<uint64_t>(reconstructed) << "\n";
-      return;
-    }
+    require_test(static_cast<uint64_t>(reconstructed) == val,
+                 "signed gadget decomposition does not reconstruct");
 
     // 2. Each digit has signed magnitude ≤ B/2
     for (size_t i = 0; i < bvks::L_KS; ++i) {
       uint64_t mag = (digits[i] > half_q) ? (q - digits[i]) : digits[i];
       if (mag > max_digit_mag) max_digit_mag = mag;
-      if (mag > B / 2) {
-        std::cout << "FAIL: digit " << i << " has magnitude " << mag
-                  << " > B/2=" << (B / 2) << " at val=" << val << "\n";
-        return;
-      }
+      require_test(mag <= B / 2,
+                   "signed gadget digit magnitude exceeds B/2");
     }
   }
 
@@ -78,7 +72,7 @@ void PirTest::test_bv_keyswitch() {
 
   BENCH_PRINT("K=" << qs.size() << " N=" << N << " t=" << t);
 
-  std::mt19937_64 rng(std::random_device{}());
+  std::mt19937_64 rng(0x62766b73ULL);
   RlweSk sk = gen_secret_key_rns(N, qs, rng);
 
   // Build a plaintext with a few distinctive coefficients.
@@ -110,19 +104,6 @@ void PirTest::test_bv_keyswitch() {
   // BENCH_PRINT("coeff at idx " << 1 << " maps to: " << galois_k << " got=" << dec_bv.data[galois_k] << " expected: " << pt_auto[galois_k]);
   // BENCH_PRINT("coeff at idx " << 2 << " maps to: " << galois_k * 2 << " got=" << dec_bv.data[galois_k * 2] << " expected: " << pt_auto[galois_k * 2]);
   // BENCH_PRINT("coeff at idx " << 3 << " maps to: " << galois_k * 3 << " got=" << dec_bv.data[galois_k * 3] << " expected: " << pt_auto[galois_k * 3]);
-  // print all the non-zero coeffs.
-  for (size_t i = 0; i < N; i++) {
-    if (dec_bv.data[i] != 0) {
-      std::cout << "coeff[" << i << "] = " << dec_bv.data[i] << "\n";
-    }
-  }
-  
-  for (size_t i = 0; i < N; i++) {
-    if (pt_auto[i] != 0) {
-      std::cout << "coeff[" << i << "] = " << pt_auto[i] << "\n";
-    }
-  }
-
   // Compare against expected automorphism of the plaintext.
   size_t diffs = 0;
   for (size_t i = 0; i < N; i++) {
@@ -134,9 +115,7 @@ void PirTest::test_bv_keyswitch() {
       ++diffs;
     }
   }
-  if (diffs == 0) {
-    std::cout << "PASS: BV key-switch matches native automorphism of plaintext\n";
-  } else {
-    std::cout << "FAIL: " << diffs << " / " << N << " coefficients differ\n";
-  }
+  require_test(diffs == 0,
+               "BV key-switch differs from the plaintext automorphism");
+  std::cout << "PASS: BV key-switch matches native automorphism of plaintext\n";
 }

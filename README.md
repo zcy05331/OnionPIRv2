@@ -39,7 +39,7 @@ python run.py [options]
 | `--leaf-count N` | Merkle benchmark leaf count; power of two (default: `2^24`) |
 | `--benchmark-json FILE` | Write structured Merkle benchmark output |
 | `--benchmark-case NAME` | Run `all`, only `standard_onionpir`, both `merkle_paths`, or only `merkle_layerwise` (default: `all`) |
-| `--run-optional-8gb` | Attempt the resource-gated `2^27`-leaf workload |
+| `--run-optional-4gb` | Attempt the resource-gated `2^26`-leaf (4 GB) workload; always 4 measured trials |
 | `-h`, `--help` | Show help message |
 
 **Examples:**

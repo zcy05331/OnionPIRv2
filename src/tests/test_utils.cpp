@@ -88,4 +88,5 @@ void PirTest::test_utils_arith() {
   const int total = primes.size() + composites.size() + invertible.size() + non_invertible.size();
   const int failed = prime_fail + comp_fail + inv_fail + noninv_fail;
   BENCH_PRINT("Passed " << (total - failed) << "/" << total << " cases");
+  require_test(failed == 0, "utils arithmetic checks failed");
 }

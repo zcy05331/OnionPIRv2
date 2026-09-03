@@ -97,8 +97,8 @@ def main():
         help="Merkle benchmark leaf count (power of two; default: 2^24)",
     )
     parser.add_argument(
-        "--run-optional-8gb", action="store_true",
-        help="Attempt the resource-gated 2^27-leaf paper workload",
+        "--run-optional-4gb", action="store_true",
+        help="Attempt the resource-gated 2^26-leaf (4 GB) workload",
     )
     parser.add_argument(
         "-c", "--config", default="k1_comp",
@@ -133,7 +133,7 @@ def main():
             parser.error("--leaf-count must be a power of two >= 2")
         if args.leaf_count > 1 << 24:
             parser.error("--leaf-count is capped at 2^24; use "
-                         "--run-optional-8gb for the resource-gated 2^27 row")
+                         "--run-optional-4gb for the resource-gated 2^26 row")
         run_cmd.extend(["--leaf-count", str(args.leaf_count)])
         run_cmd.extend(["--benchmark-case", args.benchmark_case])
         if args.benchmark_json:
@@ -146,8 +146,8 @@ def main():
                 os.makedirs(os.path.dirname(os.path.abspath(benchmark_path)),
                             exist_ok=True)
             run_cmd.extend(["--benchmark-json", benchmark_path])
-        if args.run_optional_8gb:
-            run_cmd.append("--run-optional-8gb")
+        if args.run_optional_4gb:
+            run_cmd.append("--run-optional-4gb")
 
     # --- Output redirection ---
     output_file = None

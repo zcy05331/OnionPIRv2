@@ -1,6 +1,43 @@
 #include "tests.h"
 
+#include <vector>
+
+// Correctness suite behind `--test all`: every registered test that asserts
+// its result and finishes in seconds to a few minutes. The timed benchmarks
+// (tree_bench, tree_bench_g32, cuckoo_bench), the informational cpu_info and
+// the plan_params search are excluded; merkle_benchmarks and
+// layer_layout_sweep are main.cpp entry points, not PirTest members.
+static const std::vector<std::string> kRegressionTests = {
+    "barrett", "utils_arith", "noise_sampling", "rlwe_enc", "hexl_ntt",
+    "bfv", "decrypt_mod_q", "mod_switch", "bv_ks", "ext_prod",
+    "ext_prod_mux", "fst_dim", "db_shape", "runtime_layout", "fast_expand",
+    "pir", "pir_profile", "server_loader", "shared_session",
+    "tree_index", "tree_query", "tree_select", "tree_rotate", "tree_project",
+    "tree_kernel", "tree_e2e", "tree_g32", "tree_compress",
+    "merkle_baseline", "merkle_benchmark_stats", "layer_layout_planner",
+    "merkle_integration", "cuckoo_batch",
+};
+
 void PirTest::run_test(const std::string &test_name) {
+  if (test_name == "all") {
+    std::vector<std::string> failures;
+    for (const std::string &name : kRegressionTests) {
+      try {
+        run_test(name);
+      } catch (const std::exception &error) {
+        std::cerr << "FAILED " << name << ": " << error.what() << '\n';
+        failures.push_back(name + ": " + error.what());
+      }
+    }
+    std::cout << "Regression suite: " << kRegressionTests.size() - failures.size()
+              << "/" << kRegressionTests.size() << " tests passed\n";
+    if (!failures.empty()) {
+      std::string message = "regression failures:";
+      for (const std::string &f : failures) message += "\n  " + f;
+      throw std::runtime_error(message);
+    }
+    return;
+  }
   std::cout << "Running test: " << test_name << std::endl;
 
   if (test_name == "pir")                    test_pir();

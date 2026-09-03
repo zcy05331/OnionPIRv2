@@ -10,13 +10,17 @@ void PirTest::test_pir() {
   pir_params.print_params();
   PirServer server(pir_params); // Initialize the server with the parameters
 
-  // Pre-generate all query indices so gen_data() only records what we need
-  srand(time(0));
+  // Pre-generate all query indices so gen_data() only records what we need.
+  // Deterministic schedule: the first and last plaintext rows are always
+  // queried, the rest come from a fixed seed so a failure can be replayed.
+  std::mt19937_64 rng(0x6f6e696f6e706972ULL);
   const size_t num_pt = pir_params.get_num_pt();
   std::vector<size_t> query_indices(num_experiments);
   for (size_t i = 0; i < num_experiments; i++) {
-    query_indices[i] = rand() % num_pt;
+    query_indices[i] = rng() % num_pt;
   }
+  if (num_experiments >= 1) query_indices[0] = 0;
+  if (num_experiments >= 2) query_indices[1] = num_pt - 1;
 
   BENCH_PRINT("Initializing server...");
   server.gen_data(query_indices);

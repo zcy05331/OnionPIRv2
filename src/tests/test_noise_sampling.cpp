@@ -104,6 +104,8 @@ void PirTest::test_noise_sampling() {
     BENCH_PRINT("Range check (all < q): " << (range_ok ? "OK" : "FAIL"));
     BENCH_PRINT("Chi-squared statistic: " << chi2 << " (pass < 25.0): "
                 << (uniform_ok ? "OK" : "FAIL"));
+    require_test(range_ok, "uniform sample outside [0, q)");
+    require_test(uniform_ok, "uniform sample failed the chi-squared check");
   }
 
   // ---------------------------------------------------------------------------
@@ -130,6 +132,8 @@ void PirTest::test_noise_sampling() {
                 << "  cnt(other)=" << cnt_other);
     BENCH_PRINT("Support only {0,1,q-1}: " << (support_ok ? "OK" : "FAIL"));
     BENCH_PRINT("Roughly balanced (within 5%): " << (balance_ok ? "OK" : "FAIL"));
+    require_test(support_ok, "ternary sample outside {0, 1, q-1}");
+    require_test(balance_ok, "ternary sample is unbalanced");
   }
 
   // ---------------------------------------------------------------------------
@@ -138,4 +142,5 @@ void PirTest::test_noise_sampling() {
   BENCH_PRINT("\n--- Summary ---");
   BENCH_PRINT("Test 1 sub-checks: " << pass1 << "/" << total1
               << " (mean and stddev for 3 sigma values)");
+  require_test(pass1 == total1, "Gaussian sample statistics off target");
 }

@@ -126,12 +126,19 @@ void PirTest::test_merkle_benchmark_stats() {
   report.workload.trial_leaf_indices = {4, 5, 6, 7, 8};
   report.cases.push_back(result);
 
-  const std::string path_name = "/tmp/onionpir-benchmark-stats-test.json";
+  const std::string path_name =
+      (std::filesystem::temp_directory_path() /
+       "onionpir-benchmark-stats-test.json")
+          .string();
   write_benchmark_report_json(report, path_name);
-  std::ifstream input(path_name);
   std::stringstream contents;
-  contents << input.rdbuf();
-  require_test(input.good() || input.eof(), "benchmark JSON was not readable");
+  {
+    std::ifstream input(path_name);
+    contents << input.rdbuf();
+    require_test(input.good() || input.eof(),
+                 "benchmark JSON was not readable");
+  }
+  std::filesystem::remove(path_name);
   require_test(contents.str().find("\"online_total_bytes_mixed\": 26144") !=
                    std::string::npos,
                "JSON omitted exact online bytes");
