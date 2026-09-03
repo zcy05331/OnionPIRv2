@@ -886,7 +886,9 @@ const char *layer_layout_policy_name(LayerLayoutPolicy policy) {
 std::vector<LayerLayout> plan_layer_layouts(size_t tree_height,
                                             size_t nodes_per_pt,
                                             const PirParams &reference,
-                                            const LayerPlannerConfig &config) {
+                                            const LayerPlannerConfig &config,
+                                            bool *used_fallback) {
+  if (used_fallback) *used_fallback = false;
   if (config.policy == LayerLayoutPolicy::legacy_padding) {
     return plan_layer_layouts(tree_height, nodes_per_pt, reference);
   }
@@ -904,6 +906,7 @@ std::vector<LayerLayout> plan_layer_layouts(size_t tree_height,
     if (!config.allow_profile_fallback) {
       throw std::invalid_argument(mismatch);
     }
+    if (used_fallback) *used_fallback = true;
     return plan_layer_layouts(tree_height, nodes_per_pt, reference);
   }
   const LayerLayoutSelection selection = select_layer_layouts(

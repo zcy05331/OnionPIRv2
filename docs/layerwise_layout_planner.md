@@ -68,7 +68,8 @@ A profile is rejected unless its scheme fields (n, log q, log t, log q',
 L_EP, L_KEY, L_KS, composite first dimension), nodes per plaintext, tree
 height, architecture, CPU model, compiler and HEXL version match the running
 process; `--allow-layout-profile-fallback` turns a mismatch into the legacy
-plan instead of an error. The layerwise case records the policy, every
+plan instead of an error. The layerwise case records the policy that
+actually produced the layouts (a fallback run reports `legacy`), every
 level's layout (`layers[]`) and the exact `make_query_profiled` stage sums
 (`pipeline_profile_ms`) in the benchmark JSON so gains can be attributed.
 

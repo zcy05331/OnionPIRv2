@@ -166,9 +166,13 @@ struct LayerPlannerConfig {
 // Policy-aware planner. legacy_padding delegates to the unchanged
 // plan_layer_layouts(tree_height, nodes_per_pt, reference); profiled selects
 // from config.profile after validating it against the running environment.
+// When used_fallback is given it reports whether a profiled request ended up
+// with the legacy plan through config.allow_profile_fallback, so callers can
+// record the policy that was actually applied.
 std::vector<LayerLayout> plan_layer_layouts(size_t tree_height,
                                             size_t nodes_per_pt,
                                             const PirParams &reference,
-                                            const LayerPlannerConfig &config);
+                                            const LayerPlannerConfig &config,
+                                            bool *used_fallback = nullptr);
 
 const char *layer_layout_policy_name(LayerLayoutPolicy policy);

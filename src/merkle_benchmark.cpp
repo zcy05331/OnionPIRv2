@@ -965,8 +965,10 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   validate_trial_plan(workload, reference, trials);
 
   const auto setup_start = BenchmarkClock::now();
+  bool used_fallback = false;
   std::vector<LayerLayout> layouts =
-      plan_layer_layouts(workload.tree_height, 96, reference, planner);
+      plan_layer_layouts(workload.tree_height, 96, reference, planner,
+                         &used_fallback);
   PirClient client(reference);
   SharedPirSessionKeys keys = client.create_session_keys();
   std::vector<std::unique_ptr<PirServer>> servers;
@@ -1149,7 +1151,10 @@ BenchmarkCaseExecution run_merkle_layerwise_case(
   result.server_phase_ms = phases.averages();
   result.pipeline_profile_ms = pipeline_profile_average(
       pipeline_total, trials.measured_leaf_indices.size());
-  result.layer_layout_policy = layer_layout_policy_name(planner.policy);
+  // Record the policy that actually produced the layouts: a profiled request
+  // that fell back through allow_profile_fallback ran the legacy plan.
+  result.layer_layout_policy = layer_layout_policy_name(
+      used_fallback ? LayerLayoutPolicy::legacy_padding : planner.policy);
   for (const LayerLayout &layout : layouts) {
     LayerLayoutRecord record;
     record.level = layout.level;
