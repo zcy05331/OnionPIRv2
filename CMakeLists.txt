@@ -23,30 +23,28 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
 endif()
 
 
-# Option to enable Intel HEXL optimizations. Default is ON.
-option(USE_HEXL "Enable Intel HEXL optimizations" ON)
-if (USE_HEXL)
-    message(STATUS "HEXL support enabled.")
-    add_compile_definitions(ONIONPIR_USE_HEXL)
-    
-    # Default to the repository-local installation while allowing callers to
-    # override the package directory with -DHEXL_DIR=...
-    set(
-        HEXL_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/hexl_install/lib64/cmake/hexl-1.2.6"
-        CACHE PATH "Directory containing HEXLConfig.cmake"
-    )
-    
-    # Find HEXL package
-    find_package(HEXL REQUIRED)
-    if(HEXL_FOUND)
-        message(STATUS "HEXL found at: ${HEXL_DIR}")
-    else()
-        message(FATAL_ERROR "HEXL not found. Please install HEXL or disable USE_HEXL option.")
-    endif()
-else()
-    message(STATUS "HEXL support disabled.")
+# Intel HEXL is required: every ring kernel includes hexl/hexl.hpp and there
+# is no scalar fallback. USE_HEXL stays a cache option so existing
+# `-DUSE_HEXL=ON` command lines keep working; OFF is rejected here instead of
+# failing later in the compiler.
+option(USE_HEXL "Enable Intel HEXL optimizations (required; OFF is not supported)" ON)
+if (NOT USE_HEXL)
+    message(FATAL_ERROR
+        "OnionPIRv2 requires Intel HEXL: the ring kernels have no scalar "
+        "fallback, so USE_HEXL=OFF cannot build. Install HEXL 1.2.6 and pass "
+        "-DHEXL_DIR=<prefix>/lib64/cmake/hexl-1.2.6.")
 endif()
+add_compile_definitions(ONIONPIR_USE_HEXL)
+
+# Default to the repository-local installation while allowing callers to
+# override the package directory with -DHEXL_DIR=...
+set(
+    HEXL_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/hexl_install/lib64/cmake/hexl-1.2.6"
+    CACHE PATH "Directory containing HEXLConfig.cmake"
+)
+find_package(HEXL REQUIRED)
+message(STATUS "HEXL found at: ${HEXL_DIR}")
 
 
 option(NOAVX512 "Disable AVX-512" OFF)
@@ -82,10 +80,8 @@ endif()
 file(GLOB_RECURSE SRC_FILES src/*.cpp)
 add_executable(Onion-PIR ${SRC_FILES})
 
-# Link HEXL if enabled
-if (USE_HEXL AND HEXL_FOUND)
+# Link HEXL (required, see above).
     target_link_libraries(Onion-PIR PUBLIC HEXL::hexl)
-endif()
 
 # Include directories
 target_include_directories(Onion-PIR PUBLIC src/includes)

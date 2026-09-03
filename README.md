@@ -10,7 +10,7 @@ We use c++20 and `GCC 11.4.0` for compilation.
 
 ### Installation
 
-OnionPIRv2 only depends on [Intel HEXL](https://github.com/intel/hexl) for fast NTT. The expected install path is set in the top-level `CMakeLists.txt` (`HEXL_DIR`) — adjust it to match your environment, or pass `-DHEXL_DIR=...` on the cmake line. Pass `-DUSE_HEXL=OFF` to build without HEXL (scalar fallback).
+OnionPIRv2 only depends on [Intel HEXL](https://github.com/intel/hexl) for fast NTT. The expected install path is set in the top-level `CMakeLists.txt` (`HEXL_DIR`) — adjust it to match your environment, or pass `-DHEXL_DIR=...` on the cmake line. HEXL is required: the ring kernels have no scalar fallback, and `-DUSE_HEXL=OFF` is rejected at configure time.
 
 ```
 python3 run.py            # build (Benchmark) + run pir test on k1_comp
@@ -103,7 +103,8 @@ The top-level throughput remains database bytes divided by mean server time,
 while the per-trial throughput statistics use the arithmetic mean of the
 individual trial throughputs.
 
-Set `RUN_OPTIONAL_8GB=1` to request the `2^27`-leaf paper row. It is skipped
+Set `RUN_OPTIONAL_4GB=1` to request the `2^26`-leaf (4 GB) row, which always
+measures 4 trials. It is skipped
 with an explicit `skipped_resource_limit` result unless estimated
 preprocessed storage plus a 2 GiB safety margin fits physical memory.
 
