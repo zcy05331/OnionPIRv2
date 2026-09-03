@@ -68,6 +68,8 @@ std::string replace_first(std::string text, const std::string &from,
 }  // namespace
 
 void PirTest::test_layer_layout_planner() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the layer layout planner"));
   print_func_name(__FUNCTION__);
 
   // Pruned expansion geometry, checked by hand against fast_expand_qry's walk.
@@ -273,6 +275,25 @@ void PirTest::test_layer_layout_planner() {
           text.substr(0, open + 1) + text.substr(close);
       require_test(load_fails_with(bad_path, no_samples, "no samples"),
                    "loader accepted a measurement without samples");
+    }
+    {
+      // The selector optimises these numbers: a negative sample and a
+      // stored median that disagrees with its samples are both refused.
+      const size_t at = text.find("\"server_samples_ms\": [");
+      const size_t open = text.find('[', at);
+      const std::string negative =
+          text.substr(0, open + 1) + "-1.0, " + text.substr(open + 1);
+      require_test(load_fails_with(bad_path, negative, "non-negative"),
+                   "loader accepted a negative sample");
+      const std::string key = "\"median_server_ms\": ";
+      const size_t value = text.find(key) + key.size();
+      const size_t end = text.find(',', value);
+      require_test(value != std::string::npos && end != std::string::npos,
+                   "profile text lacks a median");
+      const std::string drifted_median =
+          text.substr(0, value) + "0.5" + text.substr(end);
+      require_test(load_fails_with(bad_path, drifted_median, "does not match"),
+                   "loader accepted a median that is not the samples' median");
     }
     std::filesystem::remove(bad_path);
     bool missing_file = false;

@@ -662,9 +662,40 @@ LayerLayoutProfile load_layer_layout_profile(const std::string &path) {
       throw std::invalid_argument(
           "layer layout profile: a measurement has no samples");
     }
+    // The selector minimises these numbers, so a file cannot carry a
+    // negative or non-finite sample, and its stored median must be the
+    // median of its samples (1e-4 relative covers the writer's 6-digit
+    // formatting; a hand edit of either field is refused).
+    for (double sample : measurement.server_samples_ms) {
+      if (!std::isfinite(sample) || sample < 0.0) {
+        throw std::invalid_argument(
+            "layer layout profile: server_samples_ms must be finite and "
+            "non-negative");
+      }
+    }
+    const double median = median_server_ms_of(measurement.server_samples_ms);
+    if (!std::isfinite(measurement.median_server_ms) ||
+        std::abs(measurement.median_server_ms - median) >
+            1e-4 * std::max(1.0, median)) {
+      throw std::invalid_argument(
+          "layer layout profile: median_server_ms does not match "
+          "server_samples_ms");
+    }
+    measurement.median_server_ms = median;
     profile.measurements.push_back(std::move(measurement));
   }
   return profile;
+}
+
+double median_server_ms_of(const std::vector<double> &samples_ms) {
+  if (samples_ms.empty()) {
+    throw std::invalid_argument("median of an empty sample set");
+  }
+  std::vector<double> sorted = samples_ms;
+  std::sort(sorted.begin(), sorted.end());
+  const size_t n = sorted.size();
+  return n % 2 == 1 ? sorted[n / 2]
+                    : 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
 }
 
 std::string describe_layer_layout_profile_mismatch(

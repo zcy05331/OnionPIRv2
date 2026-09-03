@@ -93,6 +93,11 @@ struct LayerLayoutProfileEnvironment {
   bool composite_first_dim = false;
 };
 
+// Median as the sweep records it (the two middle samples averaged for an
+// even count). The loader recomputes it from the samples, which are the
+// record; the stored field must agree with them.
+double median_server_ms_of(const std::vector<double> &samples_ms);
+
 struct LayerLayoutMeasurement {
   size_t level = 0;
   LayerLayoutFeatures features;

@@ -1676,11 +1676,8 @@ LayerLayoutProfile run_layer_layout_sweep(
       for (size_t leaf : trials.measured_leaf_indices) {
         measurement.server_samples_ms.push_back(run_query(leaf));
       }
-      std::vector<double> sorted = measurement.server_samples_ms;
-      std::sort(sorted.begin(), sorted.end());
-      const size_t n = sorted.size();
       measurement.median_server_ms =
-          n % 2 == 1 ? sorted[n / 2] : 0.5 * (sorted[n / 2 - 1] + sorted[n / 2]);
+          median_server_ms_of(measurement.server_samples_ms);
       BENCH_PRINT("layer " << level << " h=" << candidate.features.expansion_height
                   << " N0=" << candidate.features.first_dim_size
                   << " Nrest=" << candidate.features.other_dim_size
