@@ -80,6 +80,10 @@ int main(int argc, char *argv[]) {
     std::string layer_layout_policy = "legacy";
     std::vector<std::string> layer_layout_profiles;  // repeatable
     bool allow_layout_profile_fallback = false;
+    // The timed PirTest benchmarks only override their defaults for flags
+    // that were actually given (see PirTest::bench_*).
+    bool experiments_given = false, warmup_given = false;
+    bool leaf_count_given = false, trial_seed_given = false;
 
     for (int i = 1; i < argc; ++i) {
       if (std::strcmp(argv[i], "--test") == 0) {
@@ -87,14 +91,18 @@ int main(int argc, char *argv[]) {
       } else if (std::strcmp(argv[i], "--experiments") == 0) {
         num_experiments = parse_size_argument(
             "--experiments", require_value(argc, argv, i));
+        experiments_given = true;
       } else if (std::strcmp(argv[i], "--warmup") == 0) {
         warmup = parse_size_argument("--warmup",
                                      require_value(argc, argv, i));
+        warmup_given = true;
       } else if (std::strcmp(argv[i], "--leaf-count") == 0) {
         leaf_count = parse_size_argument(
             "--leaf-count", require_value(argc, argv, i));
+        leaf_count_given = true;
       } else if (std::strcmp(argv[i], "--trial-seed") == 0) {
         trial_seed = parse_seed_argument(require_value(argc, argv, i));
+        trial_seed_given = true;
       } else if (std::strcmp(argv[i], "--benchmark-json") == 0) {
         benchmark_json = require_value(argc, argv, i);
       } else if (std::strcmp(argv[i], "--benchmark-case") == 0) {
@@ -201,6 +209,10 @@ int main(int argc, char *argv[]) {
     TimerLogger::setWarmup(warmup);
     PirTest test;
     test.num_experiments = num_experiments + warmup;
+    if (leaf_count_given) test.bench_leaf_count = leaf_count;
+    if (experiments_given) test.bench_measured_trials = num_experiments;
+    if (warmup_given) test.bench_warmups = warmup;
+    if (trial_seed_given) test.bench_trial_seed = trial_seed;
     test.run_test(test_name);
     return 0;
   } catch (const std::exception &error) {

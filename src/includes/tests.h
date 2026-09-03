@@ -11,15 +11,49 @@
 #include "logging.h"
 #include "matrix.h"
 
+#include <bit>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <bitset>
+#include <optional>
 #include <stdexcept>
 
 inline void require_test(bool condition, const std::string &message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+// A test whose precondition this build does not meet: a single-limb-only
+// feature, or the paper parameter point the Merkle baselines are defined for.
+// `--test all` counts these separately from failures; a direct run still
+// exits non-zero with the reason.
+struct TestNotApplicable : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+inline void require_applicable(bool condition, const std::string &reason) {
+  if (!condition) {
+    throw TestNotApplicable(reason);
+  }
+}
+// The Merkle/cuckoo baselines, their codec and their frozen constants are
+// defined for the paper parameter point CONFIG_N2048_K1_COMP (2048 x 12-bit
+// v2 plaintexts, 96 nodes each).
+inline bool paper_config_active() {
+  return ACTIVE_CONFIG == CONFIG_N2048_K1_COMP;
+}
+inline std::string paper_config_reason(const char *what) {
+  return std::string(what) +
+         " is defined for CONFIG_N2048_K1_COMP (v2 96-node plaintexts and "
+         "frozen constants); this build uses another parameter point";
+}
+// Tree-test shapes are (a, b) pairs: the height with `b` beta bits for
+// first-dimension bits `a` and `g` slots per node is L = log2(n / g) + a + b,
+// which keeps every fixture legal and meaningful under any ring size.
+inline size_t tree_height_for(size_t a, size_t b, size_t g = 1) {
+  return static_cast<size_t>(std::bit_width(DBConsts::PolyDegree / g) - 1) +
+         a + b;
 }
 
 inline void print_throughput(const std::string &name, const size_t db_size) {
@@ -31,6 +65,17 @@ inline void print_throughput(const std::string &name, const size_t db_size) {
 class PirTest {
   public:
     size_t num_experiments = 10;
+    // Timed benchmarks (tree_bench, tree_bench_g32, cuckoo_bench) take their
+    // workload from these when main.cpp received the matching flag
+    // (--leaf-count, --experiments, --warmup, --trial-seed). Without the
+    // flag each benchmark keeps its own documented default, so archived runs
+    // started without flags stay reproducible.
+    std::optional<size_t> bench_leaf_count;
+    std::optional<size_t> bench_measured_trials;
+    std::optional<size_t> bench_warmups;
+    std::optional<uint64_t> bench_trial_seed;
+    // log2 of --leaf-count (a power of two) or default_height when unset.
+    size_t bench_tree_height(size_t default_height) const;
 
     void run_test(const std::string &test_name);
 
@@ -101,3 +146,13 @@ class PirTest {
     // current config's num_pt, L_EP, L_KEY and BFV ciphertext size.
     void plan_params();
 };
+
+inline size_t PirTest::bench_tree_height(size_t default_height) const {
+  if (!bench_leaf_count) return default_height;
+  const size_t leaves = *bench_leaf_count;
+  if (leaves < 2 || (leaves & (leaves - 1)) != 0) {
+    throw std::invalid_argument(
+        "--leaf-count must be a power of two for the tree benchmarks");
+  }
+  return static_cast<size_t>(std::bit_width(leaves) - 1);
+}

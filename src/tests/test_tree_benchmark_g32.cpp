@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
-// Real-scenario efficiency: g = 32 (full 32-byte nodes) at N = 2^22 leaves,
-// the largest workload whose canonical + NTT views fit this machine's
+// Real-scenario efficiency: g = 32 (full 32-byte nodes) at N = 2^22 leaves
+// by default (--leaf-count selects another power of two), the largest workload whose canonical + NTT views fit this machine's
 // memory budget (~4.3 GiB; the 2^24 row needs ~17 GiB and is reported by
 // linear first-dimension extrapolation instead). Same scheme and statistics
 // conventions as the baselines; the payload per node now matches theirs
@@ -41,11 +41,12 @@ void PirTest::test_tree_benchmark_g32() {
   // term first-dimension sum lifts max noise to 294 > 256 — over the small-q
   // bound on unused coefficients. The scan therefore stays inside the
   // scheme's default expansion height, which is the noise-safe envelope.
+  const size_t L = bench_tree_height(22);
   const size_t key_height = scheme.get_expan_height();
   size_t chosen_a = 2;
   for (size_t a = 20; a >= 2; --a) {
     try {
-      (void)make_tree_pir_params_for_scheme(22, a, g, scheme, key_height);
+      (void)make_tree_pir_params_for_scheme(L, a, g, scheme, key_height);
       chosen_a = a;
       break;
     } catch (const std::invalid_argument &) {
@@ -53,7 +54,7 @@ void PirTest::test_tree_benchmark_g32() {
     }
   }
   const TreePirParams tree =
-      make_tree_pir_params_for_scheme(22, chosen_a, g, scheme, key_height);
+      make_tree_pir_params_for_scheme(L, chosen_a, g, scheme, key_height);
   const TreeNodeChunkSource source = [&](size_t level, size_t index,
                                          size_t chunk) {
     return synthetic_tree_node_bytes_chunk(level, index, chunk, t);
@@ -74,10 +75,11 @@ void PirTest::test_tree_benchmark_g32() {
     total_pt += level_db.plaintexts.size();
   }
 
-  constexpr size_t kWarmups = 3;
-  constexpr size_t kTrials = 16;
-  const BenchmarkTrialPlan plan = make_benchmark_trial_plan(
-      tree.N, kWarmups, kTrials, 0x747265654733325fULL);
+  const size_t kWarmups = bench_warmups.value_or(3);
+  const size_t kTrials = bench_measured_trials.value_or(16);
+  const uint64_t trial_seed = bench_trial_seed.value_or(0x747265654733325fULL);
+  const BenchmarkTrialPlan plan =
+      make_benchmark_trial_plan(tree.N, kWarmups, kTrials, trial_seed);
 
   std::vector<double> query_ms, unpack_ms, path_ms, extract_ms;
   size_t actual_response_bytes = 0;
@@ -150,7 +152,8 @@ void PirTest::test_tree_benchmark_g32() {
           .get_bv_galois_key_size(true) +
       scheme.get_gsw_key_size(true);
 
-  BENCH_PRINT("tree MVP real-hash benchmark: N=2^22 leaves, L=22, g="
+  BENCH_PRINT("tree MVP 32-byte-node benchmark: N=2^" << tree.L
+              << " leaves, L=" << tree.L << ", g="
               << tree.g << " (" << chunk_bits << "-bit chunks), N0="
               << tree.N0 << ", b=" << tree.b << ", rho=" << tree.rho
               << ", r=" << tree.r << ", w=" << tree.w << ", W=" << tree.W
@@ -160,6 +163,7 @@ void PirTest::test_tree_benchmark_g32() {
               << " MiB logical payload), setup " << setup_ms << " ms");
   BENCH_PRINT("trials: " << kTrials << " measured after " << kWarmups
               << " warmup");
+  BENCH_PRINT("trial seed: " << trial_seed);
   BENCH_PRINT("client query avg " << avg(query_ms) << " ms");
   BENCH_PRINT("server unpack (expand+convert) avg " << avg(unpack_ms)
               << " ms");

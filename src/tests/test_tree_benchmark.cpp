@@ -30,8 +30,10 @@ void PirTest::test_tree_benchmark() {
 
   PirParams scheme;
   // a = 7 keeps h_q = 8 within the scheme expansion height while bounding the
-  // beta fold work; L = 24 matches the baselines' 2^24-leaf tree.
-  const TreePirParams tree = make_tree_pir_params_for_scheme(24, 7, scheme);
+  // beta fold work; L defaults to 24 (the baselines' 2^24-leaf tree) and
+  // --leaf-count selects another power of two.
+  const size_t L = bench_tree_height(24);
+  const TreePirParams tree = make_tree_pir_params_for_scheme(L, 7, scheme);
   const uint64_t t = scheme.get_plain_mod();
   const TreeNodeSource source = [&](size_t level, size_t index) {
     return synthetic_tree_node_value(level, index, t);
@@ -53,10 +55,11 @@ void PirTest::test_tree_benchmark() {
   }
 
   // Distinct deterministic query leaves, same sampler as the baselines.
-  constexpr size_t kWarmups = 1;
-  constexpr size_t kTrials = 5;
-  const BenchmarkTrialPlan plan = make_benchmark_trial_plan(
-      tree.N, kWarmups, kTrials, 0x74726565426e6368ULL);
+  const size_t kWarmups = bench_warmups.value_or(1);
+  const size_t kTrials = bench_measured_trials.value_or(5);
+  const uint64_t trial_seed = bench_trial_seed.value_or(0x74726565426e6368ULL);
+  const BenchmarkTrialPlan plan =
+      make_benchmark_trial_plan(tree.N, kWarmups, kTrials, trial_seed);
 
   std::vector<double> query_ms, unpack_ms, path_ms, extract_ms;
   size_t actual_response_bytes = 0;
@@ -134,7 +137,8 @@ void PirTest::test_tree_benchmark() {
           .get_bv_galois_key_size(true) +
       scheme.get_gsw_key_size(true);
 
-  BENCH_PRINT("tree MVP benchmark: N=2^24 leaves, L=24, N0=" << tree.N0
+  BENCH_PRINT("tree MVP benchmark: N=2^" << tree.L << " leaves, L=" << tree.L
+              << ", N0=" << tree.N0
               << ", b=" << tree.b << ", w=" << tree.w << ", W=" << tree.W);
   BENCH_PRINT("database: " << total_pt << " packed plaintexts, g=1 payload "
               << (total_pt * N * 8) / (1 << 20) << " MiB coefficient storage,"
@@ -142,6 +146,7 @@ void PirTest::test_tree_benchmark() {
   BENCH_PRINT("trials: " << kTrials << " measured after " << kWarmups
               << " warmup, leaves "
               << plan.measured_leaf_indices.size() << " distinct");
+  BENCH_PRINT("trial seed: " << trial_seed);
   BENCH_PRINT("client query avg " << avg(query_ms) << " ms");
   BENCH_PRINT("server unpack (expand+convert) avg " << avg(unpack_ms)
               << " ms");

@@ -102,6 +102,8 @@ void require_valid_placement(
 // Correctness gate at H = 13: bucket membership, deterministic cuckoo
 // placement, and a full encrypted batch round recovering every sibling.
 void PirTest::test_cuckoo_batch() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the cuckoo batch baseline"));
   print_func_name(__FUNCTION__);
   const size_t tree_height = 13;
   const size_t leaf_count = size_t{1} << tree_height;
@@ -282,6 +284,8 @@ void PirTest::test_cuckoo_batch() {
 // Timed batch retrieval at the comparison workload: L = 22, 32-byte nodes,
 // 16 measured trials after 3 warmups, one full 22-sibling batch per trial.
 void PirTest::test_cuckoo_benchmark() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the cuckoo batch baseline"));
   print_func_name(__FUNCTION__);
   using Clock = std::chrono::steady_clock;
   const auto ms_since = [](Clock::time_point start) {
@@ -289,7 +293,8 @@ void PirTest::test_cuckoo_benchmark() {
         .count();
   };
 
-  const size_t tree_height = 22;
+  // H defaults to 22 (2^22 leaves); --leaf-count selects another power of two.
+  const size_t tree_height = bench_tree_height(22);
   const size_t leaf_count = size_t{1} << tree_height;
   const size_t item_count = 2 * (leaf_count - 1);
   const CuckooBatchParams params =
@@ -316,10 +321,11 @@ void PirTest::test_cuckoo_benchmark() {
   }
   const double setup_ms = ms_since(setup_start);
 
-  constexpr size_t kWarmups = 3;
-  constexpr size_t kTrials = 16;
-  const BenchmarkTrialPlan plan = make_benchmark_trial_plan(
-      leaf_count, kWarmups, kTrials, 0x63756b6f6f504952ULL);
+  const size_t kWarmups = bench_warmups.value_or(3);
+  const size_t kTrials = bench_measured_trials.value_or(16);
+  const uint64_t trial_seed = bench_trial_seed.value_or(0x63756b6f6f504952ULL);
+  const BenchmarkTrialPlan plan =
+      make_benchmark_trial_plan(leaf_count, kWarmups, kTrials, trial_seed);
 
   std::vector<double> client_ms, server_ms, decode_ms;
   size_t response_bytes_total = 0;
@@ -400,6 +406,7 @@ void PirTest::test_cuckoo_benchmark() {
               << " nodes, setup " << setup_ms << " ms");
   BENCH_PRINT("trials: " << kTrials << " measured after " << kWarmups
               << " warmup");
+  BENCH_PRINT("trial seed: " << trial_seed);
   BENCH_PRINT("client query avg " << avg(client_ms) << " ms");
   BENCH_PRINT("server batch avg " << avg(server_ms)
               << " ms; samples:");
