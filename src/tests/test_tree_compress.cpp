@@ -77,17 +77,19 @@ void PirTest::test_tree_compress() {
   }
 
   PirParams scheme;
-  if (scheme.K() != 1) {
-    BENCH_PRINT("skipping ring-switch gate: multi-limb scheme");
-    return;
-  }
+  // The d = 2 ring switch is defined for the single-limb scheme only; a
+  // multi-limb build cannot verify this gate, and a test that cannot run
+  // its check must fail rather than report success.
+  require_test(scheme.K() == 1,
+               "ring-switch gate requires a single-limb (K = 1) scheme build");
   PirClient client(scheme);
   const uint64_t t = scheme.get_plain_mod();
   SharedPirSessionKeys keys =
       client.create_session_keys(std::bit_width(N) - 1);
   TreeRingSwitchBundle ring = client.create_ring_switch_bundle(N / 2);
 
-  // Malformed inputs are rejected before any arithmetic.
+  // Malformed inputs are rejected before any arithmetic: an odd payload
+  // offset, and switch keys whose small ring is not n / 2.
   {
     RlweCt dummy;
     dummy.c0.assign(N, 0);
@@ -97,6 +99,13 @@ void PirTest::test_tree_compress() {
                                                 scheme);
                  }),
                  "accepted an odd payload offset");
+    TreeRingSwitchKeys wrong_ring = ring.keys;
+    wrong_ring.n2 = N / 4;
+    require_test(throws_invalid_argument([&] {
+                   (void)compress_path_response(dummy, {0}, 1, wrong_ring,
+                                                scheme);
+                 }),
+                 "accepted switch keys for the wrong ring size");
   }
 
   // ---- Full pipeline over a real-hash shape and the scalar g = 1 shape ----
@@ -114,8 +123,8 @@ void PirTest::test_tree_compress() {
     server.set_client_session_keys(client.get_client_id(), keys);
     const PreprocessedTree db = preprocess_tree_mvp(tree, hash_source, scheme);
 
-    for (size_t leaf : {size_t{0}, static_cast<size_t>(0x2BADBEEFULL %
-                                                       tree.N)}) {
+    for (size_t leaf : {size_t{0}, tree.N - 1,
+                        static_cast<size_t>(0x2BADBEEFULL % tree.N)}) {
       RlweCt query = make_tree_query(client, scheme, tree, leaf);
       ExpandedTreeQuery unpacked = unpack_tree_query(
           server, scheme, tree, client.get_client_id(), query);
@@ -147,6 +156,39 @@ void PirTest::test_tree_compress() {
                 << 2 * N * small_q_bits / 8 << " -> compressed "
                 << 2 * (N / 2) * small_q_bits / 8 << " (payload "
                 << (tree.L + 1) * 32 << " B)");
+  }
+
+  // The even-aligned packer needs 2L < rho: with g = 128 (rho = 16) and
+  // L = 8 the offsets would reach 2L = 16 = rho, so the compressed path must
+  // be refused before any homomorphic work (the MVP packer still serves it).
+  {
+    const TreePirParams tree =
+        make_tree_pir_params_for_scheme(8, 1, N / 16, scheme);
+    require_test(2 * tree.L >= tree.rho, "fixture must violate 2L < rho");
+    const PirParams qparams = tree_query_expansion_params(tree, scheme);
+    PirServer server(qparams);
+    server.set_client_session_keys(client.get_client_id(), keys);
+    const PreprocessedTree db = preprocess_tree_mvp(tree, hash_source, scheme);
+    RlweCt query = make_tree_query(client, scheme, tree, tree.N - 1);
+    ExpandedTreeQuery unpacked = unpack_tree_query(
+        server, scheme, tree, client.get_client_id(), query);
+    require_test(throws_invalid_argument([&] {
+                   (void)answer_path_compressed(db, unpacked, server,
+                                                client.get_client_id(), tree,
+                                                scheme, ring.keys);
+                 }),
+                 "accepted an even-aligned packing with 2L >= rho");
+    ExpandedTreeQuery again = unpack_tree_query(
+        server, scheme, tree, client.get_client_id(), query);
+    const TreePathResponse plain = answer_path_mvp(
+        db, again, server, client.get_client_id(), tree, scheme);
+    const auto path = extract_path_chunks_mvp(plain, client, tree);
+    for (size_t level = 0; level <= tree.L; ++level) {
+      const size_t node = (tree.N - 1) >> (tree.L - level);
+      require_test(assemble_node(path[level], width) ==
+                       synthetic_tree_node_bytes(level, node),
+                   "MVP packer must still serve the shape compression rejects");
+    }
   }
 
   // g = 1 scalar shape keeps working through the same pipeline.

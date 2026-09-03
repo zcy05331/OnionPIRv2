@@ -48,8 +48,10 @@ void PirTest::test_tree_project() {
                                            expected),
                  "projection must keep exactly the stride coefficients");
     if (depth == kLogN) {
+      const int budget = client.noise_budget(projected);
       BENCH_PRINT("projection depth " << depth << " noise budget: "
-                  << client.noise_budget(projected) << " bits");
+                  << budget << " bits");
+      require_test(budget > 0, "full-depth projection has no noise budget");
     }
   }
 
@@ -67,7 +69,8 @@ void PirTest::test_tree_project() {
         preprocess_tree_reference(tree, source);
     const std::vector<LevelPlan> plans = build_level_plans(tree);
 
-    for (size_t leaf : {size_t{0}, static_cast<size_t>(0x2BADBEEFULL % tree.N)}) {
+    for (size_t leaf : {size_t{0}, tree.N - 1,
+                        static_cast<size_t>(0x2BADBEEFULL % tree.N)}) {
       RlweCt query = make_tree_query(client, scheme, tree, leaf);
       ExpandedTreeQuery unpacked = unpack_tree_query(
           server, scheme, tree, client.get_client_id(), query);
@@ -105,10 +108,15 @@ void PirTest::test_tree_project() {
                                         expected),
               "full-depth projection must agree above level r");
         }
+        // Sec. 18: the remaining budget must stay positive at every level;
+        // the deepest level is the tightest point of the path pipeline.
+        const int budget = client.noise_budget(projected);
+        require_test(budget > 0,
+                     "select/rotate/project exhausted the noise budget");
         if (level == tree.L) {
-          BENCH_PRINT("L=" << L << " deepest level noise budget after "
-                      "select/rotate/project: "
-                      << client.noise_budget(projected) << " bits");
+          BENCH_PRINT("L=" << L << " leaf=" << leaf
+                      << " deepest level noise budget after "
+                      "select/rotate/project: " << budget << " bits");
         }
       }
     }

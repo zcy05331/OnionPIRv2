@@ -12,8 +12,10 @@
 // Milestone-4 gate (blueprint sec. 20): every tested leaf recovers the
 // complete root-to-leaf ancestor path through the full encrypted pipeline
 // (pack, unpack, per-level select/rotate/project, same-ring packing, client
-// decode), with the sec. 21.8 chunk-partition arithmetic unit-tested and
-// fresh-seed repeatability asserted.
+// decode). The sec. 21.8 chunk partition is unit-tested with tiny capacities
+// and then exercised encrypted: the g = 128 shape has rho = 16 < L + 1, so
+// its path spans two response ciphertexts. Fresh-seed repeatability is
+// asserted on every shape.
 void PirTest::test_tree_e2e() {
   print_func_name(__FUNCTION__);
   constexpr size_t N = DBConsts::PolyDegree;
@@ -45,17 +47,36 @@ void PirTest::test_tree_e2e() {
   const uint64_t t = scheme.get_plain_mod();
   SharedPirSessionKeys keys =
       client.create_session_keys(std::bit_width(N) - 1);
-  const TreeNodeSource source = [&](size_t level, size_t index) {
+  const TreeNodeSource scalar_source = [&](size_t level, size_t index) {
     return synthetic_tree_node_value(level, index, t);
   };
+  const TreeNodeChunkSource chunk_source = [&](size_t level, size_t index,
+                                               size_t chunk) {
+    return synthetic_tree_node_bytes_chunk(level, index, chunk, t);
+  };
 
-  const std::vector<std::pair<size_t, size_t>> shapes = {{16, 3}, {13, 2}};
-  for (const auto &[L, a] : shapes) {
-    const TreePirParams tree = make_tree_pir_params_for_scheme(L, a, scheme);
+  // g = 1: scalar MVP shapes, single response ciphertext.
+  // g = 128: rho = n / 128 = 16 records per plaintext, so the 17-level path
+  // of L = 16 needs two response ciphertexts (multi-chunk packing).
+  struct Shape { size_t L, a, g, expected_chunks; };
+  const std::vector<Shape> shapes = {
+      {16, 3, 1, 1}, {13, 2, 1, 1}, {16, 3, N / 16, 2}};
+  for (const Shape &shape : shapes) {
+    const TreePirParams tree =
+        make_tree_pir_params_for_scheme(shape.L, shape.a, shape.g, scheme);
+    require_test(path_chunk_bounds(tree.L + 1, tree.rho).size() ==
+                     shape.expected_chunks,
+                 "shape does not produce the intended chunk count");
     const PirParams qparams = tree_query_expansion_params(tree, scheme);
     PirServer server(qparams);
     server.set_client_session_keys(client.get_client_id(), keys);
-    const PreprocessedTree db = preprocess_tree_mvp(tree, source, scheme);
+    const PreprocessedTree db =
+        shape.g == 1 ? preprocess_tree_mvp(tree, scalar_source, scheme)
+                     : preprocess_tree_mvp(tree, chunk_source, scheme);
+    const auto expected_chunk = [&](size_t level, size_t node, size_t j) {
+      return shape.g == 1 ? scalar_source(level, node)
+                          : chunk_source(level, node, j);
+    };
 
     const std::vector<size_t> leaves = {
         0, tree.N - 1, 0x2BADBEEFULL % tree.N,
@@ -73,19 +94,39 @@ void PirTest::test_tree_e2e() {
           std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - start)
               .count();
-      require_test(response.chunks.size() == 1,
-                   "MVP path fits one main-ring ciphertext");
+      require_test(response.chunks.size() == shape.expected_chunks,
+                   "response ciphertext count");
+      require_test(response.level_count == tree.L + 1 &&
+                       response.level_offsets.size() == tree.L + 1,
+                   "response placement map shape");
+      for (size_t level = 0; level <= tree.L; ++level) {
+        require_test(response.level_offsets[level] < tree.rho,
+                     "level offset must stay inside one mod-rho period");
+      }
 
-      const std::vector<uint64_t> path =
-          extract_path_mvp(response, client, tree);
+      const std::vector<std::vector<uint64_t>> path =
+          extract_path_chunks_mvp(response, client, tree);
       require_test(path.size() == tree.L + 1, "path has L + 1 values");
       for (size_t level = 0; level <= tree.L; ++level) {
         const size_t node = leaf >> (tree.L - level);
-        require_test(path[level] == source(level, node),
-                     "extracted path value must match the tree node");
+        require_test(path[level].size() == tree.g, "g chunks per level");
+        for (size_t j = 0; j < tree.g; ++j) {
+          require_test(path[level][j] == expected_chunk(level, node, j),
+                       "extracted path value must match the tree node");
+        }
       }
-      BENCH_PRINT("L=" << L << " leaf=" << leaf << " path server time "
-                  << server_ms << " ms, small_q response: "
+      if (shape.g == 1) {
+        const std::vector<uint64_t> flat = extract_path_mvp(response, client,
+                                                            tree);
+        for (size_t level = 0; level <= tree.L; ++level) {
+          require_test(flat[level] == path[level][0],
+                       "scalar extraction view must agree with chunk view");
+        }
+      }
+      BENCH_PRINT("L=" << shape.L << " g=" << shape.g << " leaf=" << leaf
+                  << " chunks=" << response.chunks.size()
+                  << " path server time " << server_ms
+                  << " ms, small_q response: "
                   << (response.small_q ? "yes" : "no"));
     }
 
@@ -104,8 +145,8 @@ void PirTest::test_tree_e2e() {
         db, first_u, server, client.get_client_id(), tree, scheme);
     TreePathResponse second_r = answer_path_mvp(
         db, second_u, server, client.get_client_id(), tree, scheme);
-    require_test(extract_path_mvp(first_r, client, tree) ==
-                     extract_path_mvp(second_r, client, tree),
+    require_test(extract_path_chunks_mvp(first_r, client, tree) ==
+                     extract_path_chunks_mvp(second_r, client, tree),
                  "fresh-seed repetitions must decode the same path");
   }
 }

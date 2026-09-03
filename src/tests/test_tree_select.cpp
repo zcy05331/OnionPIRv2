@@ -118,7 +118,6 @@ void PirTest::test_tree_select() {
     const std::vector<size_t> leaves = {
         0, tree.N - 1, 0x2BADBEEFULL % tree.N,
         tree.P + tree.B + (tree.b >= 2 ? 1 : 0)};
-    bool checked_pyramid = false;
     for (size_t leaf : leaves) {
       const ClientCoordinates coords = client_index(leaf, tree);
       RlweCt query = make_tree_query(client, scheme, tree, leaf);
@@ -127,22 +126,18 @@ void PirTest::test_tree_select() {
       AlphaPyramid pyramid =
           build_alpha_pyramid(unpacked.alpha, tree, scheme);
 
-      // Sec. 10 gate, once per shape: pyramid level c one-hot-selects
+      // Sec. 10 gate for every leaf (alpha = 0 for leaf 0, the maximal
+      // alpha for the last leaf): pyramid level c one-hot-selects
       // floor(alpha / 2^c), and the apex encrypts the constant 1.
-      if (!checked_pyramid) {
-        for (size_t c = 0; c <= tree.a; ++c) {
-          for (size_t j = 0; j < pyramid[c].size(); ++j) {
-            RlwePt pt = client.decrypt_ct(pyramid[c][j]);
-            const uint64_t expected =
-                (coords.alpha >> c) == j ? 1 : 0;
-            require_test(pt.data[0] == expected,
-                         "pyramid one-hot indicator");
-            for (size_t i = 1; i < pt.data.size(); ++i) {
-              require_test(pt.data[i] == 0, "pyramid slot is a constant");
-            }
+      for (size_t c = 0; c <= tree.a; ++c) {
+        for (size_t j = 0; j < pyramid[c].size(); ++j) {
+          RlwePt pt = client.decrypt_ct(pyramid[c][j]);
+          const uint64_t expected = (coords.alpha >> c) == j ? 1 : 0;
+          require_test(pt.data[0] == expected, "pyramid one-hot indicator");
+          for (size_t i = 1; i < pt.data.size(); ++i) {
+            require_test(pt.data[i] == 0, "pyramid slot is a constant");
           }
         }
-        checked_pyramid = true;
       }
 
       // Milestone-2 gate: every level of the path decrypts to the exact

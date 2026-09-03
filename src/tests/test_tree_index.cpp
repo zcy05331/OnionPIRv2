@@ -1,4 +1,6 @@
 #include "tests.h"
+
+#include <bit>
 #include "tree_index.h"
 #include "tree_query.h"
 
@@ -207,18 +209,30 @@ void PirTest::test_tree_index() {
   // Scheme binding: n, t, moduli and both gadget lengths come from the live
   // PirParams. The frozen blueprint sec. 18 anchor applies to the L_EP = 6
   // paper configuration.
+  // Every expectation is derived from the live scheme (n, L_EP), so the
+  // check holds for any ring size; at n = 2048, L_EP = 6 it reproduces the
+  // frozen blueprint anchor r = 11, b = 2, B = 4, w = 86, W = 128, h_q = 7.
   PirParams scheme;
   const TreePirParams bound = make_tree_pir_params_for_scheme(16, 3, scheme);
-  require_test(bound.n == scheme.get_poly_degree() && bound.r == 11,
+  const size_t log_n = std::bit_width(scheme.get_poly_degree()) - 1;
+  require_test(bound.n == scheme.get_poly_degree() && bound.r == log_n,
                "scheme ring binding");
   require_test(bound.ell_beta == scheme.get_l() &&
                    bound.ell_gamma == scheme.get_l(),
                "scheme gadget binding");
-  require_test(bound.N0 == 8 && bound.B == 4 && bound.b == 2,
+  const size_t expected_b = 16 - log_n - 3;
+  require_test(bound.N0 == 8 && bound.b == expected_b &&
+                   bound.B == (size_t{1} << expected_b),
                "blueprint shape-test split");
-  if (scheme.get_l() == 6) {
-    require_test(bound.w == 86 && bound.W == 128 && bound.h_q == 7,
-                 "blueprint shape-test packed width");
+  const size_t expected_w =
+      8 + scheme.get_l() * (expected_b + log_n);
+  require_test(bound.w == expected_w && bound.W == std::bit_ceil(expected_w) &&
+                   bound.h_q == std::bit_width(bound.W) - 1,
+               "blueprint shape-test packed width");
+  if (scheme.get_poly_degree() == 2048 && scheme.get_l() == 6) {
+    require_test(bound.r == 11 && bound.b == 2 && bound.w == 86 &&
+                     bound.W == 128 && bound.h_q == 7,
+                 "frozen blueprint sec. 18 anchor");
   }
   // Runtime capability bound: N0 = 2^10 gives w > 1024, so h_q = 11 stays
   // within W <= n yet exceeds the scheme's session-key expansion height (10).
