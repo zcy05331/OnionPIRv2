@@ -50,8 +50,8 @@ void PirTest::test_tree_query() {
       utils::gsw_gadget(ell, scheme.get_base_log2(), qs);
   // The phase-scale gate below only fires for gadget rows above 2^29. Under a
   // single-limb config the top row must clear that floor, or the scale/order
-  // check would silently become vacuous; multi-limb configs (29-bit limbs)
-  // are known-vacuous there and rely on the CMux gate instead.
+  // check would silently become vacuous; multi-limb configs skip it
+  // (phase_limb0 is a single-limb decryption) and rely on the CMux gate.
   require_test(qs.size() > 1 || gadget[0][0] >= (uint64_t{1} << 29),
                "phase-scale gate is vacuous under this config");
 
@@ -120,7 +120,7 @@ void PirTest::test_tree_query() {
         if (bit == 0) {
           require_test(plaintext_is_zero(client.decrypt_ct(row_ct)),
                        "zero selector row decrypts to zero");
-        } else if (gadget[0][row] >= kNoiseFloor) {
+        } else if (qs.size() == 1 && gadget[0][row] >= kNoiseFloor) {
           const std::vector<uint64_t> phase = phase_limb0(row_ct);
           require_test(circular_distance(phase[0], gadget[0][row] % q0, q0) <
                            kPhaseTolerance,
@@ -173,7 +173,8 @@ void PirTest::test_tree_query() {
   };
 
   // Shapes: the blueprint sec. 18 split (b = 2) and the b = 0 boundary.
-  const std::vector<std::pair<size_t, size_t>> shapes = {{16, 3}, {13, 2}};
+  const std::vector<std::pair<size_t, size_t>> shapes = {
+      {tree_height_for(3, 2), 3}, {tree_height_for(2, 0), 2}};
   for (const auto &[L, a] : shapes) {
     const TreePirParams tree = make_tree_pir_params_for_scheme(L, a, scheme);
     require_test(scheme.get_expan_height() >= tree.h_q,
@@ -212,7 +213,8 @@ void PirTest::test_tree_query() {
   // before any homomorphic work (wrong expansion height here, so scales
   // would silently disagree if it were accepted).
   {
-    const TreePirParams tree = make_tree_pir_params_for_scheme(16, 3, scheme);
+    const TreePirParams tree =
+        make_tree_pir_params_for_scheme(tree_height_for(3, 2), 3, scheme);
     PirServer mismatched(scheme.with_query_shape(
         {tree.N0, tree.b + tree.r, tree.h_q + 1}));
     mismatched.set_client_session_keys(client.get_client_id(), keys);

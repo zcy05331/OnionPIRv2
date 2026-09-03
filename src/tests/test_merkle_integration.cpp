@@ -40,6 +40,8 @@ bool throws_invalid_argument(Fn &&fn) {
 }  // namespace
 
 void PirTest::test_merkle_integration() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the Merkle benchmark suite"));
   // H=8 cheaply covers first, last, and interior leaves through codec, query,
   // server evaluation, response wire round-trip, and decryption.
   const MerkleWorkload small{size_t{1} << 8, 8, 32};

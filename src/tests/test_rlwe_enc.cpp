@@ -49,10 +49,14 @@ void PirTest::test_rlwe_enc() {
     RlweCt ct;
     encrypt_zero(sk, N, q, sigma, rng, ct, /*ntt_form=*/false);
 
-    const uint64_t delta = q / t;
     std::vector<uint64_t> m = {1, 2, 42, 0, 7, t - 1, t / 2, 3};
     for (size_t i = 0; i < m.size(); i++) {
-      ct.c0[i] = (ct.c0[i] + (delta * m[i]) % q) % q;
+      // round(m q / t) mod q, the encoding the RNS paths use; the
+      // floor(q / t) * m shortcut is only exact when q mod t is small
+      // relative to q / t (it is not at the 60-bit q / 39-bit t point).
+      const uint64_t scaled = static_cast<uint64_t>(
+          ((static_cast<__uint128_t>(m[i]) * q + t / 2) / t) % q);
+      ct.c0[i] = (ct.c0[i] + scaled) % q;
     }
 
     RlwePt pt;

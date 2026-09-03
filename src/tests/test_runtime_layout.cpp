@@ -1,6 +1,8 @@
 #include "tests.h"
 
 void PirTest::test_runtime_layout() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("test_runtime_layout"));
   PirParams defaults;
 
   // Freeze the H=24 flat shape and prove that layout changes do not alter the

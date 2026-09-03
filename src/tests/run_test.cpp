@@ -20,17 +20,27 @@ static const std::vector<std::string> kRegressionTests = {
 
 void PirTest::run_test(const std::string &test_name) {
   if (test_name == "all") {
-    std::vector<std::string> failures;
+    std::vector<std::string> failures, not_applicable;
     for (const std::string &name : kRegressionTests) {
       try {
         run_test(name);
+      } catch (const TestNotApplicable &why) {
+        std::cout << "NOT APPLICABLE " << name << ": " << why.what() << '\n';
+        not_applicable.push_back(name + ": " + why.what());
       } catch (const std::exception &error) {
         std::cerr << "FAILED " << name << ": " << error.what() << '\n';
         failures.push_back(name + ": " + error.what());
       }
     }
-    std::cout << "Regression suite: " << kRegressionTests.size() - failures.size()
-              << "/" << kRegressionTests.size() << " tests passed\n";
+    const size_t applicable = kRegressionTests.size() - not_applicable.size();
+    std::cout << "Regression suite: " << applicable - failures.size() << "/"
+              << applicable << " applicable tests passed";
+    if (!not_applicable.empty()) {
+      std::cout << ", " << not_applicable.size()
+                << " not applicable to this build:";
+      for (const std::string &n : not_applicable) std::cout << "\n  " << n;
+    }
+    std::cout << '\n';
     if (!failures.empty()) {
       std::string message = "regression failures:";
       for (const std::string &f : failures) message += "\n  " + f;

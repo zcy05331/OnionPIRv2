@@ -32,7 +32,9 @@ void PirTest::test_tree_kernel() {
   };
 
   struct Shape { size_t L, a, g; };
-  const std::vector<Shape> shapes = {{16, 3, 1}, {13, 2, 1}, {14, 3, 32}};
+  const std::vector<Shape> shapes = {{tree_height_for(3, 2), 3, 1},
+                                     {tree_height_for(2, 0), 2, 1},
+                                     {tree_height_for(3, 5, 32), 3, 32}};
   for (const Shape &shape : shapes) {
     const TreePirParams tree =
         make_tree_pir_params_for_scheme(shape.L, shape.a, shape.g, scheme);

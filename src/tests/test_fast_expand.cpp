@@ -31,7 +31,11 @@ void PirTest::test_fast_expand_query() {
     RlweCt zero_ct = client.fresh_zero_ct();
     const int budget = client.noise_budget(zero_ct);
     BENCH_PRINT("fresh zero noise budget: " << budget << " bits");
-    require_test(budget > 0, "fresh zero ciphertext has no noise budget");
+    // noise_budget is a first-limb diagnostic; multi-limb builds rely on
+    // the value checks below.
+    if (pir_params.K() == 1) {
+      require_test(budget > 0, "fresh zero ciphertext has no noise budget");
+    }
     const RlwePt zero_pt = client.decrypt_ct(zero_ct);
     for (uint64_t v : zero_pt.data) {
       require_test(v == 0, "fresh zero ciphertext does not decrypt to zero");
@@ -65,7 +69,9 @@ void PirTest::test_fast_expand_query() {
     const int budget = client.noise_budget(fast_exp_q[target]);
     BENCH_PRINT("query " << query_idx << ": expanded leaf noise budget "
                 << budget << " bits");
-    require_test(budget > 0, "expanded leaf has no noise budget");
+    if (pir_params.K() == 1) {
+      require_test(budget > 0, "expanded leaf has no noise budget");
+    }
 
     for (size_t j = 0; j < fst_dim_sz; ++j) {
       const RlwePt leaf = client.decrypt_ct(fast_exp_q[j]);

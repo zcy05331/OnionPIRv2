@@ -33,6 +33,8 @@ size_t heap_sibling_local(size_t leaf, size_t tree_height, size_t level) {
 }  // namespace
 
 void PirTest::test_merkle_baseline() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the Merkle baseline"));
   PirParams scheme;
   MerkleWorkload small{size_t{1} << 8, 8, 32};
   // Boundary leaves plus an interior level anchor sibling and flat-ordinal

@@ -213,14 +213,14 @@ void PirTest::test_tree_index() {
   // check holds for any ring size; at n = 2048, L_EP = 6 it reproduces the
   // frozen blueprint anchor r = 11, b = 2, B = 4, w = 86, W = 128, h_q = 7.
   PirParams scheme;
-  const TreePirParams bound = make_tree_pir_params_for_scheme(16, 3, scheme);
+  const TreePirParams bound = make_tree_pir_params_for_scheme(tree_height_for(3, 2), 3, scheme);
   const size_t log_n = std::bit_width(scheme.get_poly_degree()) - 1;
   require_test(bound.n == scheme.get_poly_degree() && bound.r == log_n,
                "scheme ring binding");
   require_test(bound.ell_beta == scheme.get_l() &&
                    bound.ell_gamma == scheme.get_l(),
                "scheme gadget binding");
-  const size_t expected_b = 16 - log_n - 3;
+  const size_t expected_b = bound.L - log_n - 3;  // the (a = 3, b = 2) shape
   require_test(bound.N0 == 8 && bound.b == expected_b &&
                    bound.B == (size_t{1} << expected_b),
                "blueprint shape-test split");

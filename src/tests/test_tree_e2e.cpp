@@ -56,11 +56,13 @@ void PirTest::test_tree_e2e() {
   };
 
   // g = 1: scalar MVP shapes, single response ciphertext.
-  // g = 128: rho = n / 128 = 16 records per plaintext, so the 17-level path
+  // g = n / 16: rho = 16 records per plaintext, so the 17-level path
   // of L = 16 needs two response ciphertexts (multi-chunk packing).
   struct Shape { size_t L, a, g, expected_chunks; };
   const std::vector<Shape> shapes = {
-      {16, 3, 1, 1}, {13, 2, 1, 1}, {16, 3, N / 16, 2}};
+      {tree_height_for(3, 2), 3, 1, 1},
+      {tree_height_for(2, 0), 2, 1, 1},
+      {16, 3, N / 16, 2}};
   for (const Shape &shape : shapes) {
     const TreePirParams tree =
         make_tree_pir_params_for_scheme(shape.L, shape.a, shape.g, scheme);
@@ -104,6 +106,38 @@ void PirTest::test_tree_e2e() {
                      "level offset must stay inside one mod-rho period");
       }
 
+      if (leaf == leaves.front()) {
+        // Extraction refuses, before any decryption, a chunk count that
+        // does not match the level partition, a response without its
+        // placement map, and the flat extractor on multi-chunk nodes.
+        const auto rejects = [](auto &&fn) {
+          try {
+            fn();
+          } catch (const std::invalid_argument &) {
+            return true;
+          }
+          return false;
+        };
+        TreePathResponse extra_chunk = response;
+        extra_chunk.chunks.push_back(extra_chunk.chunks.back());
+        require_test(rejects([&] {
+                       (void)extract_path_chunks_mvp(extra_chunk, client,
+                                                     tree);
+                     }),
+                     "extracted a response with a stray chunk");
+        TreePathResponse unmapped = response;
+        unmapped.level_offsets.pop_back();
+        require_test(rejects([&] {
+                       (void)extract_path_chunks_mvp(unmapped, client, tree);
+                     }),
+                     "extracted a response without its placement map");
+        if (tree.g != 1) {
+          require_test(rejects([&] {
+                         (void)extract_path_mvp(response, client, tree);
+                       }),
+                       "flat extraction accepted multi-chunk nodes");
+        }
+      }
       const std::vector<std::vector<uint64_t>> path =
           extract_path_chunks_mvp(response, client, tree);
       require_test(path.size() == tree.L + 1, "path has L + 1 values");

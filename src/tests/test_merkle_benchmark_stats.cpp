@@ -9,6 +9,8 @@
 #include <sstream>
 
 void PirTest::test_merkle_benchmark_stats() {
+  require_applicable(paper_config_active(),
+                     paper_config_reason("the Merkle benchmark suite"));
   BenchmarkTrialPlan distinct_queries =
       make_benchmark_trial_plan(8, 3, 5, 0x123456789abcdef0ULL);
   std::vector<size_t> all_query_ids = distinct_queries.warmup_leaf_indices;

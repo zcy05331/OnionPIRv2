@@ -101,7 +101,8 @@ void PirTest::test_tree_select() {
     return synthetic_tree_node_value(level, index, scheme.get_plain_mod());
   };
 
-  const std::vector<std::pair<size_t, size_t>> shapes = {{16, 3}, {13, 2}};
+  const std::vector<std::pair<size_t, size_t>> shapes = {
+      {tree_height_for(3, 2), 3}, {tree_height_for(2, 0), 2}};
   for (const auto &[L, a] : shapes) {
     const TreePirParams tree = make_tree_pir_params_for_scheme(L, a, scheme);
     const PirParams qparams = tree_query_expansion_params(tree, scheme);

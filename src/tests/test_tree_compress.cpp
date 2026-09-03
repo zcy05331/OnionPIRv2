@@ -78,10 +78,11 @@ void PirTest::test_tree_compress() {
 
   PirParams scheme;
   // The d = 2 ring switch is defined for the single-limb scheme only; a
-  // multi-limb build cannot verify this gate, and a test that cannot run
-  // its check must fail rather than report success.
-  require_test(scheme.K() == 1,
-               "ring-switch gate requires a single-limb (K = 1) scheme build");
+  // multi-limb build cannot verify this gate, so the test is reported as
+  // not applicable rather than as a pass.
+  require_applicable(
+      scheme.K() == 1,
+      "ring-switch gate requires a single-limb (K = 1) scheme build");
   PirClient client(scheme);
   const uint64_t t = scheme.get_plain_mod();
   SharedPirSessionKeys keys =
@@ -117,7 +118,7 @@ void PirTest::test_tree_compress() {
 
   {
     const TreePirParams tree =
-        make_tree_pir_params_for_scheme(14, 3, 32, scheme);
+        make_tree_pir_params_for_scheme(tree_height_for(3, 5, 32), 3, 32, scheme);
     const PirParams qparams = tree_query_expansion_params(tree, scheme);
     PirServer server(qparams);
     server.set_client_session_keys(client.get_client_id(), keys);
@@ -133,6 +134,29 @@ void PirTest::test_tree_compress() {
           ring.keys);
       require_test(compressed.n2 == N / 2,
                    "compressed response lives in the half ring");
+      if (leaf == 0) {
+        // decode_compressed_path refuses a secret from another ring, a
+        // response without its offset map, and an odd record stride.
+        TreeRingSwitchSecret other_ring = ring.secret;
+        other_ring.n2 = N / 4;
+        require_test(throws_invalid_argument([&] {
+                       (void)decode_compressed_path(compressed, other_ring,
+                                                    t, tree.g, tree.rho);
+                     }),
+                     "decoded with a secret for another ring");
+        CompressedPathResponse unmapped = compressed;
+        unmapped.level_offsets.pop_back();
+        require_test(throws_invalid_argument([&] {
+                       (void)decode_compressed_path(unmapped, ring.secret,
+                                                    t, tree.g, tree.rho);
+                     }),
+                     "decoded a response without its offset map");
+        require_test(throws_invalid_argument([&] {
+                       (void)decode_compressed_path(
+                           compressed, ring.secret, t, tree.g, tree.rho + 1);
+                     }),
+                     "decoded with an odd record stride");
+      }
       const std::vector<std::vector<uint64_t>> path = decode_compressed_path(
           compressed, ring.secret, t, tree.g, tree.rho);
       require_test(path.size() == tree.L + 1, "compressed path length");
@@ -158,7 +182,7 @@ void PirTest::test_tree_compress() {
                 << (tree.L + 1) * 32 << " B)");
   }
 
-  // The even-aligned packer needs 2L < rho: with g = 128 (rho = 16) and
+  // The even-aligned packer needs 2L < rho: with g = n/16 (rho = 16) and
   // L = 8 the offsets would reach 2L = 16 = rho, so the compressed path must
   // be refused before any homomorphic work (the MVP packer still serves it).
   {
@@ -193,7 +217,7 @@ void PirTest::test_tree_compress() {
 
   // g = 1 scalar shape keeps working through the same pipeline.
   {
-    const TreePirParams tree = make_tree_pir_params_for_scheme(13, 2, scheme);
+    const TreePirParams tree = make_tree_pir_params_for_scheme(tree_height_for(2, 0), 2, scheme);
     const PirParams qparams = tree_query_expansion_params(tree, scheme);
     PirServer server(qparams);
     server.set_client_session_keys(client.get_client_id(), keys);

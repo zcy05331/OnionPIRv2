@@ -28,6 +28,10 @@ static std::string pt_to_string(const RlwePt &pt) {
 void PirTest::test_external_product() {
   print_func_name(__FUNCTION__);
   PirParams pir_params;
+  // Single-modulus fixture (encrypt_bfv / decrypt_and_budget are the K = 1
+  // specialisation); the K-limb external product is covered by test_pir.
+  require_applicable(pir_params.K() == 1,
+                     "test_external_product is a single-modulus fixture");
   const size_t coeff_count = DBConsts::PolyDegree;
 
   // ================== Create RGSW(1) ==================

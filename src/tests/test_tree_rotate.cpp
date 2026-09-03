@@ -68,7 +68,8 @@ void PirTest::test_tree_rotate() {
   const TreeNodeSource source = [&](size_t level, size_t index) {
     return synthetic_tree_node_value(level, index, t);
   };
-  const std::vector<std::pair<size_t, size_t>> shapes = {{16, 3}, {13, 2}};
+  const std::vector<std::pair<size_t, size_t>> shapes = {
+      {tree_height_for(3, 2), 3}, {tree_height_for(2, 0), 2}};
   bool saw_zero_bit = false, saw_one_bit = false;
   for (const auto &[L, a] : shapes) {
     const TreePirParams tree = make_tree_pir_params_for_scheme(L, a, scheme);
